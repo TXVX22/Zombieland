@@ -114,6 +114,10 @@ local function SavePosition()
 
 	local slot = CurrentWeapon:GetAttribute("WeaponSlot") or 0
 
+	-- Berechne den ABSOLUTEN Scale (wie er tatsaechlich angewendet wird)
+	local origScale = CurrentWeapon:GetAttribute("OriginalScale") or 1
+	local absoluteScale = origScale * Scale
+
 	print("════════════════════════════════════════════════════════")
 	print("[WEAPON POSITIONER] SAVED - Slot " .. slot)
 	print("")
@@ -124,7 +128,9 @@ local function SavePosition()
 	))
 	print("")
 	print("-- GameConfig.WeaponScales:")
-	print(string.format('[%d] = %.2f,', slot, Scale))
+	print(string.format('[%d] = %.2f,', slot, absoluteScale))
+	print("")
+	print("-- Debug Info: OriginalScale=" .. string.format("%.2f", origScale) .. " x Multiplier=" .. string.format("%.2f", Scale) .. " = AbsoluteScale=" .. string.format("%.2f", absoluteScale))
 	print("════════════════════════════════════════════════════════")
 end
 
