@@ -1,0 +1,829 @@
+-- ENHANCED LOBBY HybridMorphServer with Height and Rotation Adjustment
+-- ServerScriptService/HybridMorphServer (Script)
+
+print("[HYBRID MORPH SERVER - ENHANCED] Starting with height/rotation adjustment...")
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+
+-- Data Modules
+local SoldierSkinData = require(ReplicatedStorage:WaitForChild("SoldierSkinData"))
+
+-- Try to load SoldierData for height/rotation info
+local SoldierData = nil
+local dataFolder = ReplicatedStorage:FindFirstChild("Data")
+if dataFolder then
+	local soldierDataModule = dataFolder:FindFirstChild("SoldierData")
+	if soldierDataModule then
+		SoldierData = require(soldierDataModule)
+		print("[HYBRID MORPH] SoldierData loaded from Data folder")
+	end
+end
+
+if not SoldierData then
+	local soldierDataModule = ReplicatedStorage:FindFirstChild("SoldierData")
+	if soldierDataModule then
+		SoldierData = require(soldierDataModule)
+		print("[HYBRID MORPH] SoldierData loaded from ReplicatedStorage")
+	end
+end
+
+-- Wait for shop remotes to be created first
+local remotesFolder = ReplicatedStorage:WaitForChild("ShopRemotes", 10)
+if not remotesFolder then
+	warn("[HYBRID MORPH SERVER] ShopRemotes folder not found! Creating it...")
+	remotesFolder = Instance.new("Folder")
+	remotesFolder.Name = "ShopRemotes"
+	remotesFolder.Parent = ReplicatedStorage
+end
+
+-- Create our remotes
+local animationSyncRemote = remotesFolder:FindFirstChild("SyncMorphAnimations")
+if not animationSyncRemote then
+	animationSyncRemote = Instance.new("RemoteEvent")
+	animationSyncRemote.Name = "SyncMorphAnimations"
+	animationSyncRemote.Parent = remotesFolder
+end
+
+local triggerMorphRemote = remotesFolder:FindFirstChild("TriggerServerMorph")
+if not triggerMorphRemote then
+	triggerMorphRemote = Instance.new("RemoteEvent")
+	triggerMorphRemote.Name = "TriggerServerMorph"
+	triggerMorphRemote.Parent = remotesFolder
+end
+
+-- Track morphs and adjustments
+local activePlayerMorphs = {}
+local pendingAutoMorphs = {}
+local characterAdjustments = {} -- NEW: Track height/rotation adjustments
+
+-- ===== GET SOLDIER DATA FOR HEIGHT/ROTATION =====
+
+local function getSoldierDataForSkin(skinName)
+	if not SoldierData then return nil end
+
+	-- Try direct match
+	for key, data in pairs(SoldierData) do
+		if data.Model == skinName or data.Name == skinName then
+			return data
+		end
+	end
+
+	-- Try with umlaut variations
+	local variations = {
+		["Höhlenmensch"] = "Hoehlenmensch",
+		["Bogenschütze"] = "Bogenschuetze",
+		["Armbrustschütze"] = "Armbrustschuetze",
+		["Wächter"] = "Waechter",
+		["ModernNahkämpfer"] = "ModernNahkaempfer"
+	}
+
+	local mappedName = variations[skinName]
+	if mappedName and SoldierData[mappedName] then
+		return SoldierData[mappedName]
+	end
+
+	-- Try case-insensitive search
+	for key, data in pairs(SoldierData) do
+		if (data.Model and data.Model:lower() == skinName:lower()) or 
+			(data.Name and data.Name:lower() == skinName:lower()) then
+			return data
+		end
+	end
+
+	return nil
+end
+
+-- ===== ADJUST CHARACTER HEIGHT AND ROTATION =====
+
+local function adjustCharacterTransform(character, skinName)
+	local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
+	if not humanoidRootPart then return end
+
+	-- Clear old adjustments
+	local oldAdjustment = characterAdjustments[character]
+	if oldAdjustment then
+		if oldAdjustment.heightPart then
+			oldAdjustment.heightPart:Destroy()
+		end
+		if oldAdjustment.rotationMotor then
+			oldAdjustment.rotationMotor:Destroy()
+		end
+	end
+
+	-- Get soldier data for height/rotation
+	local soldierData = getSoldierDataForSkin(skinName)
+	if not soldierData then 
+		print("[HYBRID MORPH] No soldier data found for", skinName)
+		return 
+	end
+
+	local heightOffset = soldierData.HeightOffset or 0
+	local specialRotation = soldierData.SpecialRotation or 0
+
+	print("[HYBRID MORPH] Adjusting character for", skinName)
+	print("  Height Offset:", heightOffset)
+	print("  Special Rotation:", specialRotation)
+
+	local adjustment = {}
+
+	-- APPLY HEIGHT OFFSET (Make character "float")
+	if heightOffset > 0 then
+		-- Create invisible part to lift the character
+		local heightPart = Instance.new("Part")
+		heightPart.Name = "HeightAdjustment"
+		heightPart.Size = Vector3.new(2, 0.2, 2)
+		heightPart.Transparency = 1
+		heightPart.CanCollide = false
+		heightPart.Massless = true
+		heightPart.Parent = character
+
+		-- Position it below the character
+		heightPart.CFrame = humanoidRootPart.CFrame * CFrame.new(0, -3 - heightOffset/2, 0)
+
+		-- Weld it to the HumanoidRootPart
+		local weld = Instance.new("WeldConstraint")
+		weld.Part0 = humanoidRootPart
+		weld.Part1 = heightPart
+		weld.Parent = humanoidRootPart
+
+		-- Adjust the Hip Height
+		local humanoid = character:FindFirstChild("Humanoid")
+		if humanoid then
+			-- Store original hip height
+			adjustment.originalHipHeight = humanoid.HipHeight
+			-- Add the height offset to hip height
+			humanoid.HipHeight = humanoid.HipHeight + heightOffset
+			print("[HYBRID MORPH] Adjusted HipHeight from", adjustment.originalHipHeight, "to", humanoid.HipHeight)
+		end
+
+		adjustment.heightPart = heightPart
+		adjustment.heightOffset = heightOffset
+	end
+
+	-- APPLY ROTATION (for Panzer - 90 degrees)
+	if specialRotation ~= 0 then
+		-- We'll use a BodyPosition and BodyAngularVelocity approach
+		-- First, let's store the rotation value
+		adjustment.rotation = specialRotation
+
+		-- Apply constant rotation offset using a Motor6D
+		local rotationMotor = Instance.new("Motor6D")
+		rotationMotor.Name = "RotationAdjustment"
+		rotationMotor.Part0 = humanoidRootPart
+		rotationMotor.Part1 = humanoidRootPart -- Self-reference for rotation
+		rotationMotor.C0 = CFrame.Angles(0, math.rad(specialRotation), 0)
+		rotationMotor.Parent = humanoidRootPart
+
+		adjustment.rotationMotor = rotationMotor
+
+		-- Alternative approach: Rotate the entire character model
+		-- This is the "pfusch" approach - just rotate everything
+		task.spawn(function()
+			-- Keep rotating the character
+			local connection
+			connection = RunService.Heartbeat:Connect(function()
+				if not character.Parent or not humanoidRootPart.Parent then
+					connection:Disconnect()
+					return
+				end
+
+				-- Apply rotation offset to movement
+				local lookVector = humanoidRootPart.CFrame.LookVector
+				local rightVector = humanoidRootPart.CFrame.RightVector
+
+				-- Rotate by 90 degrees (swap forward/right)
+				if specialRotation == 90 then
+					-- This makes the character move sideways
+					-- We'll adjust this in the movement system
+				end
+			end)
+
+			adjustment.rotationConnection = connection
+		end)
+
+		print("[HYBRID MORPH] Applied rotation of", specialRotation, "degrees")
+	end
+
+	characterAdjustments[character] = adjustment
+end
+
+-- ===== RESTORE CHARACTER TRANSFORM =====
+
+local function restoreCharacterTransform(character)
+	local adjustment = characterAdjustments[character]
+	if not adjustment then return end
+
+	-- Restore hip height
+	if adjustment.originalHipHeight then
+		local humanoid = character:FindFirstChild("Humanoid")
+		if humanoid then
+			humanoid.HipHeight = adjustment.originalHipHeight
+			print("[HYBRID MORPH] Restored HipHeight to", adjustment.originalHipHeight)
+		end
+	end
+
+	-- Remove height part
+	if adjustment.heightPart then
+		adjustment.heightPart:Destroy()
+	end
+
+	-- Remove rotation motor
+	if adjustment.rotationMotor then
+		adjustment.rotationMotor:Destroy()
+	end
+
+	-- Disconnect rotation connection
+	if adjustment.rotationConnection then
+		adjustment.rotationConnection:Disconnect()
+	end
+
+	characterAdjustments[character] = nil
+end
+
+-- ===== ENHANCED NETWORK OWNERSHIP MANAGER =====
+
+local function setEnhancedNetworkOwnership(character, player)
+	-- Set ownership for all baseparts
+	for _, descendant in ipairs(character:GetDescendants()) do
+		if descendant:IsA("BasePart") and not descendant.Anchored then
+			-- Set custom physics for better sync
+			if descendant.Name ~= "HumanoidRootPart" then
+				descendant.CustomPhysicalProperties = PhysicalProperties.new(
+					0.5, -- Lower density for smoother movement
+					0.5, -- Friction
+					0.1, -- Low elasticity
+					1,   -- ElasticityWeight
+					1    -- FrictionWeight
+				)
+			end
+
+			-- Set network ownership with retry
+			local success = pcall(function()
+				descendant:SetNetworkOwner(player)
+			end)
+
+			if not success then
+				wait(0.1)
+				pcall(function()
+					descendant:SetNetworkOwner(player)
+				end)
+			end
+		end
+	end
+
+	-- Call global network sync if available
+	if _G.NetworkSyncRefresh then
+		_G.NetworkSyncRefresh(player)
+	end
+
+	print("[HYBRID MORPH] Enhanced network ownership set for", player.Name)
+end
+
+-- ===== HELPER FUNCTIONS =====
+
+local function findModelInFolder(folder, modelName)
+	local model = folder:FindFirstChild(modelName)
+	if model then return model end
+
+	local variations = {
+		modelName,
+		modelName:gsub("oe", "ö"):gsub("Oe", "Ö"),
+		modelName:gsub("ae", "ä"):gsub("Ae", "Ä"),
+		modelName:gsub("ue", "ü"):gsub("Ue", "Ü"),
+		modelName:gsub("ö", "oe"):gsub("Ö", "Oe"),
+		modelName:gsub("ä", "ae"):gsub("Ä", "Ae"),
+		modelName:gsub("ü", "ue"):gsub("Ü", "Ue")
+	}
+
+	for _, variant in ipairs(variations) do
+		model = folder:FindFirstChild(variant)
+		if model then return model end
+	end
+
+	for _, child in ipairs(folder:GetChildren()) do
+		if child.Name:lower() == modelName:lower() then
+			return child
+		end
+	end
+
+	return nil
+end
+
+-- ===== ENHANCED SERVER MORPH FUNCTION =====
+
+local function serverMorphPlayer(player, skinName)
+	local character = player.Character
+	if not character then 
+		warn("[HYBRID MORPH] No character for", player.Name)
+		return false 
+	end
+
+	local humanoid = character:FindFirstChild("Humanoid")
+	if not humanoid then 
+		warn("[HYBRID MORPH] No humanoid for", player.Name)
+		return false 
+	end
+
+	-- Cleanup old morph
+	if activePlayerMorphs[player] and activePlayerMorphs[player].model then
+		activePlayerMorphs[player].model:Destroy()
+	end
+
+	-- Restore character transform before applying new morph
+	restoreCharacterTransform(character)
+
+	-- Get skin data
+	local skinData = SoldierSkinData:GetSkin(skinName)
+	if not skinData then
+		warn("[HYBRID MORPH] Skin not found:", skinName)
+		return false
+	end
+
+	-- Find the model
+	local assetsFolder = ReplicatedStorage:FindFirstChild("Assets")
+	if not assetsFolder then
+		warn("[HYBRID MORPH] Assets folder not found!")
+		return false
+	end
+
+	local soldiersFolder = assetsFolder:FindFirstChild("Soldiers")
+	if not soldiersFolder then
+		warn("[HYBRID MORPH] Soldiers folder not found!")
+		return false
+	end
+
+	local epochFolder = soldiersFolder:FindFirstChild(skinData.epoch)
+	if not epochFolder then
+		warn("[HYBRID MORPH] Epoch folder not found:", skinData.epoch)
+		return false
+	end
+
+	local soldierModel = findModelInFolder(epochFolder, skinData.name)
+	if not soldierModel then
+		warn("[HYBRID MORPH] Soldier model not found:", skinData.name, "in", skinData.epoch)
+		return false
+	end
+
+	-- Clone and setup morph
+	local morphModel = soldierModel:Clone()
+	morphModel.Name = "ServerMorph_" .. skinName
+
+	-- Hide original character parts
+	for _, part in ipairs(character:GetDescendants()) do
+		if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then
+			part.Transparency = 1
+			part.CanCollide = false
+		elseif part:IsA("Accessory") then
+			local handle = part:FindFirstChild("Handle")
+			if handle then
+				handle.Transparency = 1
+			end
+		elseif part:IsA("Decal") and part.Name == "face" then
+			part.Transparency = 1
+		end
+	end
+
+	local rootPart = character:FindFirstChild("HumanoidRootPart")
+	if not rootPart then
+		warn("[HYBRID MORPH] HumanoidRootPart not found!")
+		return false
+	end
+
+	morphModel.Parent = character
+
+	-- Setup morph positioning
+	if morphModel:IsA("Model") then
+		local morphRoot = morphModel:FindFirstChild("HumanoidRootPart") or 
+			morphModel:FindFirstChild("Torso") or 
+			morphModel:FindFirstChild("UpperTorso") or
+			morphModel:FindFirstChild("Root")
+
+		if morphRoot then
+			morphModel.PrimaryPart = morphRoot
+		end
+
+		if morphModel.PrimaryPart then
+			morphModel:SetPrimaryPartCFrame(rootPart.CFrame)
+		end
+	end
+
+	-- ENHANCED WELDING with better physics
+	local morphWelds = {}
+	for _, part in ipairs(morphModel:GetDescendants()) do
+		if part:IsA("BasePart") then
+			part.Anchored = false
+			part.CanCollide = false
+			part.Massless = true
+
+			-- Set custom physics for smoother sync
+			part.CustomPhysicalProperties = PhysicalProperties.new(
+				0.3, -- Very low density
+				0.5, -- Medium friction
+				0,   -- No elasticity
+				1,   -- ElasticityWeight
+				1    -- FrictionWeight
+			)
+
+			if part.Name == "HumanoidRootPart" or 
+				part.Name == "Torso" or 
+				part.Name == "UpperTorso" or
+				part.Name == "Root" then
+
+				part.CFrame = rootPart.CFrame
+
+				-- Use Motor6D for smoother movement
+				local motor = Instance.new("Motor6D")
+				motor.Part0 = rootPart
+				motor.Part1 = part
+				motor.C0 = CFrame.new()
+				motor.C1 = CFrame.new()
+				motor.Parent = rootPart
+				table.insert(morphWelds, motor)
+			else
+				local parentPart = part.Parent:FindFirstChild("HumanoidRootPart") or
+					part.Parent:FindFirstChild("Torso") or
+					part.Parent:FindFirstChild("UpperTorso") or
+					rootPart
+
+				if parentPart ~= part then
+					local weld = Instance.new("WeldConstraint")
+					weld.Part0 = parentPart
+					weld.Part1 = part
+					weld.Parent = parentPart
+					table.insert(morphWelds, weld)
+				end
+			end
+		end
+
+		-- Remove scripts and humanoids from morph
+		if part:IsA("Script") or part:IsA("LocalScript") then
+			part.Enabled = false
+			part:Destroy()
+		end
+
+		if part:IsA("Humanoid") or part:IsA("Animator") or part:IsA("AnimationController") then
+			part:Destroy()
+		end
+	end
+
+	-- Store morph data
+	activePlayerMorphs[player] = {
+		model = morphModel,
+		skinName = skinName,
+		epoch = skinData.epoch,
+		welds = morphWelds
+	}
+
+	-- Tag the morph model
+	local skinTag = Instance.new("StringValue")
+	skinTag.Name = "MorphSkinName"
+	skinTag.Value = skinName
+	skinTag.Parent = morphModel
+
+	local epochTag = Instance.new("StringValue")
+	epochTag.Name = "MorphEpoch"
+	epochTag.Value = skinData.epoch
+	epochTag.Parent = morphModel
+
+	-- APPLY HEIGHT AND ROTATION ADJUSTMENTS
+	adjustCharacterTransform(character, skinName)
+
+	-- Set enhanced network ownership
+	setEnhancedNetworkOwnership(character, player)
+
+	-- Tell ALL clients to setup animations
+	animationSyncRemote:FireAllClients(player, skinName, skinData.epoch)
+
+	-- Notify network sync system if available
+	if _G.NetworkSyncEnhanceMorph then
+		_G.NetworkSyncEnhanceMorph(player)
+	end
+
+	print("[HYBRID MORPH] Successfully morphed", player.Name, "to:", skinName)
+	return true
+end
+
+-- ===== CLEANUP FUNCTION =====
+
+local function cleanupMorph(player)
+	if activePlayerMorphs[player] then
+		if activePlayerMorphs[player].model then
+			activePlayerMorphs[player].model:Destroy()
+		end
+
+		-- Restore character visibility
+		local character = player.Character
+		if character then
+			-- Restore character transform
+			restoreCharacterTransform(character)
+
+			for _, part in ipairs(character:GetDescendants()) do
+				if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then
+					part.Transparency = 0
+					part.CanCollide = true
+
+					-- Reset physics
+					part.CustomPhysicalProperties = nil
+				elseif part:IsA("Accessory") then
+					local handle = part:FindFirstChild("Handle")
+					if handle then
+						handle.Transparency = 0
+					end
+				elseif part:IsA("Decal") and part.Name == "face" then
+					part.Transparency = 0
+				end
+			end
+
+			-- Re-enable animate script
+			local animateScript = character:FindFirstChild("Animate")
+			if animateScript then
+				animateScript.Disabled = false
+			end
+		end
+
+		activePlayerMorphs[player] = nil
+	end
+
+	-- Tell clients to cleanup animations
+	animationSyncRemote:FireAllClients(player, nil, nil)
+
+	-- Notify network sync system
+	if _G.NetworkSyncResetMorph then
+		_G.NetworkSyncResetMorph(player)
+	end
+end
+
+-- ===== AUTO-MORPH SYSTEM =====
+
+local function tryAutoMorph(player, skinName)
+	-- Attempt to morph with retries
+	local attempts = 0
+	local success = false
+
+	repeat
+		attempts = attempts + 1
+
+		-- Make sure character still exists
+		if not player.Character then
+			print("[HYBRID MORPH] Character lost during auto-morph attempt")
+			break
+		end
+
+		success = serverMorphPlayer(player, skinName)
+
+		if success then
+			print("[HYBRID MORPH] ✅ Auto-morphed", player.Name, "to:", skinName, "on attempt", attempts)
+			-- Remove from pending list
+			pendingAutoMorphs[player] = nil
+			break
+		else
+			print("[HYBRID MORPH] Auto-morph attempt", attempts, "failed, retrying...")
+			task.wait(1.5)
+		end
+	until success or attempts >= 5
+
+	if not success then
+		warn("[HYBRID MORPH] Failed to auto-morph", player.Name, "after 5 attempts")
+		pendingAutoMorphs[player] = nil
+	end
+
+	return success
+end
+
+-- ===== REMOTE HANDLER =====
+
+triggerMorphRemote.OnServerEvent:Connect(function(player, skinName)
+	print("[HYBRID MORPH] Received morph request from shop for", player.Name, "->", skinName)
+	serverMorphPlayer(player, skinName)
+end)
+
+-- ===== PLAYER EVENTS =====
+
+Players.PlayerAdded:Connect(function(player)
+	player.CharacterAdded:Connect(function(character)
+		-- Get saved skin data
+		local savedSkinName = nil
+
+		-- Wait a bit for shop system to load
+		task.wait(2)
+
+		-- Try to get skin from shop system
+		if _G.GetPlayerSkinData then
+			local skinData = _G.GetPlayerSkinData(player)
+			if skinData then
+				savedSkinName = skinData.lastEquippedSkin or skinData.equippedSkin
+				print("[HYBRID MORPH] Got saved skin from shop system:", savedSkinName or "none")
+			end
+		end
+
+		-- Alternative: Check if player already had a morph
+		if not savedSkinName and activePlayerMorphs[player] then
+			savedSkinName = activePlayerMorphs[player].skinName
+			print("[HYBRID MORPH] Using previous morph:", savedSkinName)
+		end
+
+		-- If we have a saved skin, try to morph
+		if savedSkinName then
+			print("[HYBRID MORPH] Scheduling auto-morph for", player.Name, "->", savedSkinName)
+			pendingAutoMorphs[player] = savedSkinName
+
+			-- Start auto-morph in separate thread
+			task.spawn(function()
+				-- Extra wait to ensure character is fully loaded
+				task.wait(1)
+
+				if pendingAutoMorphs[player] == savedSkinName then
+					tryAutoMorph(player, savedSkinName)
+				end
+			end)
+		else
+			-- No saved skin, just ensure proper network ownership
+			setEnhancedNetworkOwnership(character, player)
+			print("[HYBRID MORPH] No saved skin for", player.Name)
+		end
+	end)
+
+	player.CharacterRemoving:Connect(function()
+		local character = player.Character
+		if character then
+			-- Restore transform before character is removed
+			restoreCharacterTransform(character)
+		end
+
+		-- Don't fully cleanup, just remove the model
+		if activePlayerMorphs[player] and activePlayerMorphs[player].model then
+			activePlayerMorphs[player].model:Destroy()
+			activePlayerMorphs[player].model = nil
+			-- Keep the skinName stored for next spawn
+		end
+
+		-- Cancel any pending auto-morph
+		pendingAutoMorphs[player] = nil
+	end)
+end)
+
+Players.PlayerRemoving:Connect(function(player)
+	cleanupMorph(player)
+	pendingAutoMorphs[player] = nil
+
+	-- Clean up character adjustments
+	local character = player.Character
+	if character then
+		restoreCharacterTransform(character)
+		characterAdjustments[character] = nil
+	end
+end)
+
+-- ===== GLOBAL FUNCTIONS =====
+
+_G.HybridMorphPlayer = serverMorphPlayer
+_G.HybridCleanupMorph = cleanupMorph
+
+_G.GetPlayerMorphData = function(player)
+	if activePlayerMorphs[player] then
+		return {
+			skinName = activePlayerMorphs[player].skinName,
+			epoch = activePlayerMorphs[player].epoch
+		}
+	end
+	return nil
+end
+
+-- NEW: Force auto-morph function for shop system
+_G.ForceAutoMorph = function(player, skinName)
+	print("[HYBRID MORPH] Force auto-morph requested for", player.Name, "->", skinName)
+
+	if not player.Character then
+		print("[HYBRID MORPH] Waiting for character...")
+		pendingAutoMorphs[player] = skinName
+		return false
+	end
+
+	return tryAutoMorph(player, skinName)
+end
+
+-- ===== CHECK FOR PENDING MORPHS =====
+-- This runs periodically to catch any missed auto-morphs
+task.spawn(function()
+	while true do
+		task.wait(5)
+
+		for player, skinName in pairs(pendingAutoMorphs) do
+			if player and player.Parent and player.Character then
+				print("[HYBRID MORPH] Retrying pending morph for", player.Name)
+				task.spawn(function()
+					tryAutoMorph(player, skinName)
+				end)
+			else
+				-- Player gone or no character
+				pendingAutoMorphs[player] = nil
+			end
+		end
+	end
+end)
+
+-- ===== DEBUG COMMANDS =====
+
+Players.PlayerAdded:Connect(function(player)
+	player.Chatted:Connect(function(message)
+		if message:lower() == "/morphinfo" then
+			local morphData = activePlayerMorphs[player]
+			if morphData then
+				print("[HYBRID MORPH] Player", player.Name, "is morphed to:", morphData.skinName)
+			else
+				print("[HYBRID MORPH] Player", player.Name, "has no active morph")
+			end
+
+			if pendingAutoMorphs[player] then
+				print("[HYBRID MORPH] Pending auto-morph:", pendingAutoMorphs[player])
+			end
+
+			local character = player.Character
+			if character and characterAdjustments[character] then
+				local adj = characterAdjustments[character]
+				print("[HYBRID MORPH] Character adjustments:")
+				print("  Height Offset:", adj.heightOffset or "none")
+				print("  Rotation:", adj.rotation or "none")
+			end
+
+		elseif message:lower() == "/testmorph" then
+			serverMorphPlayer(player, "Höhlenmensch")
+
+		elseif message:lower() == "/testpanzer" then
+			serverMorphPlayer(player, "Panzer")
+
+		elseif message:lower() == "/testheight" then
+			-- Test different heights
+			local character = player.Character
+			if character then
+				local humanoid = character:FindFirstChild("Humanoid")
+				if humanoid then
+					for i = 0, 10, 2 do
+						humanoid.HipHeight = i
+						print("[HYBRID MORPH] Testing HipHeight:", i)
+						wait(1)
+					end
+					humanoid.HipHeight = 2 -- Reset to default
+				end
+			end
+
+		elseif message:lower() == "/checksync" then
+			local character = player.Character
+			if character then
+				local rootPart = character:FindFirstChild("HumanoidRootPart")
+				if rootPart then
+					local owner = rootPart:GetNetworkOwner()
+					print("[HYBRID MORPH] NetworkOwner:", owner and owner.Name or "Server")
+
+					-- Force refresh
+					if _G.NetworkSyncRefresh then
+						_G.NetworkSyncRefresh(player)
+						print("[HYBRID MORPH] Network sync refreshed")
+					end
+				end
+			end
+
+		elseif message:lower() == "/syncstatus" then
+			print("[HYBRID MORPH] === SYNC STATUS ===")
+			print("Active Morphs:")
+			for p, data in pairs(activePlayerMorphs) do
+				print("  ", p.Name, "->", data.skinName or "none")
+			end
+			print("Pending Auto-Morphs:")
+			for p, skin in pairs(pendingAutoMorphs) do
+				print("  ", p.Name, "->", skin)
+			end
+			print("Character Adjustments:")
+			for char, adj in pairs(characterAdjustments) do
+				local p = Players:GetPlayerFromCharacter(char)
+				if p then
+					print("  ", p.Name, "-> Height:", adj.heightOffset or 0, "Rotation:", adj.rotation or 0)
+				end
+			end
+
+		elseif message:lower() == "/forceautomorph" then
+			-- Get saved skin and force morph
+			if _G.GetPlayerSkinData then
+				local skinData = _G.GetPlayerSkinData(player)
+				if skinData and skinData.lastEquippedSkin then
+					print("[HYBRID MORPH] Forcing auto-morph to:", skinData.lastEquippedSkin)
+					tryAutoMorph(player, skinData.lastEquippedSkin)
+				else
+					print("[HYBRID MORPH] No saved skin found")
+				end
+			end
+
+		elseif message:lower() == "/resetadjust" then
+			local character = player.Character
+			if character then
+				restoreCharacterTransform(character)
+				print("[HYBRID MORPH] Reset character adjustments")
+			end
+		end
+	end)
+end)
+
+print("[HYBRID MORPH SERVER - ENHANCED] Loaded with height/rotation adjustment system!")
+print("Commands: /morphinfo, /testpanzer, /testheight, /resetadjust, /syncstatus")

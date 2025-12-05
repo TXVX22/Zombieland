@@ -1,0 +1,346 @@
+-- UltimateData Module (COMPLETE VERSION)
+-- Location: ReplicatedStorage/UltimateData (ModuleScript)
+
+local UltimateData = {}
+
+-- REGULAR ULTIMATES (Epoch-specific)
+UltimateData.Ultimates = {
+	StoneAge = {
+		{
+			name = "MeteorRain",
+			displayName = "Meteor Rain",
+			icon = "rbxassetid://106319948504731",
+			description = "Summons a devastating meteor shower from the sky",
+			panzaroPrice = 0,
+			rarity = "Legendary",
+			isDefault = false,
+			effectColor = Color3.fromRGB(255, 100, 0)
+		},
+		{
+			name = "SturmTornado", 
+			displayName = "Storm Tornado",
+			icon = "rbxassetid://139759484058136",
+			description = "Creates a powerful tornado that sweeps enemies",
+			panzaroPrice = 0,
+			rarity = "Epic",
+			isDefault = true,
+			effectColor = Color3.fromRGB(150, 150, 200)
+		},
+		{
+			name = "GravityReverse",
+			displayName = "Gravity Reverse",
+			icon = "rbxassetid://91899398331606",
+			description = "Reverses gravity for all enemies temporarily",
+			panzaroPrice = 0,
+			rarity = "Legendary",
+			isDefault = false,
+			effectColor = Color3.fromRGB(200, 100, 255)
+		},
+		{
+			name = "CottonCandyCloud",
+			displayName = "Cotton Candy Cloud",
+			icon = "rbxassetid://79981996638447",
+			description = "Summons sticky sweet clouds that trap enemies",
+			panzaroPrice = 0,
+			rarity = "Rare",
+			isDefault = false,
+			effectColor = Color3.fromRGB(255, 182, 193)
+		}
+	},
+
+	Medieval = {
+		{
+			name = "FireArrowRain",
+			displayName = "Fire Arrow Rain",
+			icon = "rbxassetid://125848040620488", -- TODO: Add icon ID
+			description = "Rains flaming arrows from above",
+			panzaroPrice = 0,
+			rarity = "Epic",
+			isDefault = true,
+			effectColor = Color3.fromRGB(255, 100, 0)
+		},
+		{
+			name = "HeroHymn",
+			displayName = "Hero's Hymn",
+			icon = "rbxassetid://136182969491644", -- TODO: Add icon ID
+			description = "Inspires allies with increased damage and speed",
+			panzaroPrice = 0,
+			rarity = "Rare",
+			isDefault = false,
+			effectColor = Color3.fromRGB(255, 215, 0)
+		},
+		{
+			name = "MagicSwords",
+			displayName = "Magic Swords",
+			icon = "rbxassetid://126092502822307", -- TODO: Add icon ID
+			description = "Summons enchanted swords that seek enemies",
+			panzaroPrice = 0,
+			rarity = "Legendary",
+			isDefault = false,
+			effectColor = Color3.fromRGB(100, 200, 255)
+		},
+		{
+			name = "TimePortal",
+			displayName = "Time Portal",
+			icon = "rbxassetid://97784667704533", -- TODO: Add icon ID
+			description = "Opens a portal that slows time for enemies",
+			panzaroPrice = 0,
+			rarity = "Legendary",
+			isDefault = false,
+			effectColor = Color3.fromRGB(150, 100, 255)
+		},
+		{
+			name = "WitchBroomAttack",
+			displayName = "Witch Broom Attack",
+			icon = "rbxassetid://75923032802954", -- TODO: Add icon ID
+			description = "Magical brooms sweep the battlefield",
+			panzaroPrice = 0,
+			rarity = "Epic",
+			isDefault = false,
+			effectColor = Color3.fromRGB(200, 100, 200)
+		}
+	},
+
+	Industrial = {
+		{
+			name = "SteamTrain",
+			displayName = "Steam Train",
+			icon = "rbxassetid://88599501716211", -- TODO: Add icon ID
+			description = "Summons a powerful steam locomotive",
+			panzaroPrice = 0,
+			rarity = "Epic",
+			isDefault = true,
+			effectColor = Color3.fromRGB(100, 100, 100)
+		},
+		{
+			name = "FactoryProduction",
+			displayName = "Factory Production",
+			icon = "rbxassetid://119690907653320", -- TODO: Add icon ID
+			description = "Produces defensive turrets automatically",
+			panzaroPrice = 0,
+			rarity = "Rare",
+			isDefault = false,
+			effectColor = Color3.fromRGB(150, 150, 150)
+		},
+		{
+			name = "DynamiteRain",
+			displayName = "Dynamite Rain",
+			icon = "rbxassetid://86158311099528", -- TODO: Add icon ID
+			description = "Drops explosive dynamite from above",
+			panzaroPrice = 0,
+			rarity = "Legendary",
+			isDefault = false,
+			effectColor = Color3.fromRGB(255, 50, 50)
+		},
+		{
+			name = "SteamGiant",
+			displayName = "Steam Giant",
+			icon = "rbxassetid://122296910635954", -- TODO: Add icon ID
+			description = "Summons a massive steam-powered robot",
+			panzaroPrice = 0,
+			rarity = "Legendary",
+			isDefault = false,
+			effectColor = Color3.fromRGB(100, 150, 200)
+		},
+		{
+			name = "BombFlash",
+			displayName = "Bomb Flash",
+			icon = "rbxassetid://113159029642976", -- TODO: Add icon ID
+			description = "Quick explosive bursts across the field",
+			panzaroPrice = 0,
+			rarity = "Common",
+			isDefault = false,
+			effectColor = Color3.fromRGB(255, 100, 0)
+		},
+		{
+			name = "TeslaLightningShow",
+			displayName = "Tesla Lightning Show",
+			icon = "rbxassetid://93317748688374", -- TODO: Add icon ID
+			description = "Electrical storm devastates enemies",
+			panzaroPrice = 0,
+			rarity = "Epic",
+			isDefault = false,
+			effectColor = Color3.fromRGB(255, 255, 0)
+		}
+	},
+
+	Modern = {
+		{
+			name = "JetStrike",
+			displayName = "Jet Strike",
+			icon = "rbxassetid://111876801161673", -- TODO: Add icon ID
+			description = "Calls in a fighter jet airstrike",
+			panzaroPrice = 0,
+			rarity = "Legendary",
+			isDefault = true,
+			effectColor = Color3.fromRGB(100, 100, 200)
+		},
+		{
+			name = "SniperTeam",
+			displayName = "Sniper Team",
+			icon = "rbxassetid://86372485014476", -- TODO: Add icon ID
+			description = "Elite snipers target high-value enemies",
+			panzaroPrice = 0,
+			rarity = "Epic",
+			isDefault = false,
+			effectColor = Color3.fromRGB(50, 50, 50)
+		},
+		{
+			name = "Flashbang",
+			displayName = "Flashbang",
+			icon = "rbxassetid://96203815371321", -- TODO: Add icon ID
+			description = "Blinds and stuns all enemies",
+			panzaroPrice = 0,
+			rarity = "Common",
+			isDefault = false,
+			effectColor = Color3.fromRGB(255, 255, 255)
+		},
+		{
+			name = "SatelliteLaser",
+			displayName = "Satellite Laser",
+			icon = "rbxassetid://120976159026790", -- TODO: Add icon ID
+			description = "Orbital laser strikes from space",
+			panzaroPrice = 0,
+			rarity = "Legendary",
+			isDefault = false,
+			effectColor = Color3.fromRGB(255, 0, 0)
+		},
+		{
+			name = "LaserLightShow",
+			displayName = "Laser Light Show",
+			icon = "rbxassetid://106325914898818", -- TODO: Add icon ID
+			description = "Disco lasers of destruction",
+			panzaroPrice = 0,
+			rarity = "Rare",
+			isDefault = false,
+			effectColor = Color3.fromRGB(255, 0, 255)
+		}
+	},
+
+	Future = {
+		{
+			name = "PhaseCannons",
+			displayName = "Phase Cannons",
+			icon = "rbxassetid://117015975956285", -- TODO: Add icon ID
+			description = "Advanced energy weapons phase through defenses",
+			panzaroPrice = 0,
+			rarity = "Epic",
+			isDefault = true,
+			effectColor = Color3.fromRGB(0, 200, 255)
+		},
+		{
+			name = "NanoSwarm",
+			displayName = "Nano Swarm",
+			icon = "rbxassetid://72049166778352", -- TODO: Add icon ID
+			description = "Microscopic robots dismantle enemies",
+			panzaroPrice = 0,
+			rarity = "Legendary",
+			isDefault = false,
+			effectColor = Color3.fromRGB(100, 255, 100)
+		},
+		{
+			name = "EnergyShields",
+			displayName = "Energy Shields",
+			icon = "rbxassetid://102896342088026", -- TODO: Add icon ID
+			description = "Projects protective force fields",
+			panzaroPrice = 0,
+			rarity = "Rare",
+			isDefault = false,
+			effectColor = Color3.fromRGB(0, 150, 255)
+		},
+		{
+			name = "AIVirus",
+			displayName = "AI Virus",
+			icon = "rbxassetid://99434407208015", -- TODO: Add icon ID
+			description = "Hacks and controls enemy units",
+			panzaroPrice = 0,
+			rarity = "Epic",
+			isDefault = false,
+			effectColor = Color3.fromRGB(255, 0, 100)
+		},
+		{
+			name = "BlackHole",
+			displayName = "Black Hole",
+			icon = "rbxassetid://123286420783381", -- TODO: Add icon ID
+			description = "Creates a gravitational singularity",
+			panzaroPrice = 0,
+			rarity = "Legendary",
+			isDefault = false,
+			effectColor = Color3.fromRGB(50, 0, 100)
+		}
+	}
+}
+
+-- SPECIAL/MYTHIC ULTIMATES
+UltimateData.SpecialUltimates = {
+	{
+		name = "BubbleStorm",
+		displayName = "💎 Bubble Storm 💎",
+		icon = "rbxassetid://83183999305993",
+		description = "Universal: Futuristic bubble prison technology works in any era!",
+		panzaroPrice = 0,
+		rarity = "Mythic",
+		effectColor = Color3.fromRGB(255, 100, 255)
+	},
+	{
+		name = "DinoEggBomb",
+		displayName = "🌟 Dino Egg Bomb 🌟",
+		icon = "rbxassetid://102534128145088",
+		description = "Universal: Prehistoric explosive eggs transcend time!",
+		panzaroPrice = 0,
+		rarity = "Mythic",
+		effectColor = Color3.fromRGB(255, 200, 0)
+	}
+}
+
+-- Rarity colors
+UltimateData.RarityConfig = {
+	Common = {
+		color = Color3.fromRGB(176, 176, 176),
+		multiplier = 1
+	},
+	Rare = {
+		color = Color3.fromRGB(85, 170, 255),
+		multiplier = 1.2
+	},
+	Epic = {
+		color = Color3.fromRGB(163, 53, 238),
+		multiplier = 1.5
+	},
+	Legendary = {
+		color = Color3.fromRGB(255, 170, 0),
+		multiplier = 2
+	},
+	Mythic = {
+		color = Color3.fromRGB(255, 0, 128),
+		multiplier = 3,
+		glowEffect = true
+	}
+}
+
+-- Helper Functions
+function UltimateData:GetUltimate(name)
+	-- Check regular ultimates
+	for epoch, ultimates in pairs(self.Ultimates) do
+		for _, ultimate in ipairs(ultimates) do
+			if ultimate.name == name then
+				return ultimate, epoch
+			end
+		end
+	end
+
+	-- Check special ultimates
+	for _, ultimate in ipairs(self.SpecialUltimates) do
+		if ultimate.name == name then
+			return ultimate, "Special"
+		end
+	end
+
+	return nil
+end
+
+function UltimateData:GetRarityConfig(rarity)
+	return self.RarityConfig[rarity] or self.RarityConfig.Common
+end
+
+return UltimateData

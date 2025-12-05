@@ -1,0 +1,1008 @@
+-- GameUI.lua
+-- Platzierung: StarterPlayer/StarterPlayerScripts/GameUI (LocalScript)
+
+local GameUI = {}
+
+-- Services
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+
+-- Player
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+
+-- Modules
+local GameConfig = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("GameConfig"))
+
+-- Remotes (warten auf Server)
+local Remotes = ReplicatedStorage:WaitForChild("Remotes", 30)
+local PlayerDataRemote = Remotes:WaitForChild("PlayerData", 10)
+local LevelUpRemote = Remotes:WaitForChild("LevelUp", 10)
+local ExpGainedRemote = Remotes:WaitForChild("ExpGained", 10)
+local WaveUpdateRemote = Remotes:WaitForChild("WaveUpdate", 10)
+local WeaponEquipRemote = Remotes:WaitForChild("WeaponEquip", 10)
+local WeaponFireRemote = Remotes:WaitForChild("WeaponFire", 10)
+local FenceBuildProgressRemote = Remotes:WaitForChild("FenceBuildProgress", 10)
+
+-- UI References
+local MainGui = nil
+local CrosshairFrame = nil
+local HealthBar = nil
+local ExpBar = nil
+local LevelLabel = nil
+local WaveLabel = nil
+local WeaponSlots = {}
+local AmmoLabel = nil
+local BuildProgressBar = nil
+
+-- State
+local CurrentLevel = 1
+local CurrentExp = 0
+local MaxExp = 60
+local CurrentHealth = 100
+local MaxHealth = 100
+local SelectedWeapon = 1
+local UnlockedWeapons = {1}
+local CurrentAmmo = 12
+local MaxAmmo = 12
+
+-- ═══════════════════════════════════════════════════════════════
+-- MAIN GUI CREATION
+-- ═══════════════════════════════════════════════════════════════
+
+function GameUI.Initialize()
+	print("[GameUI] Initializing...")
+
+	-- Erstelle Haupt-GUI
+	MainGui = Instance.new("ScreenGui")
+	MainGui.Name = "ZombielandUI"
+	MainGui.ResetOnSpawn = false
+	MainGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+	MainGui.Parent = playerGui
+
+	-- Erstelle UI Komponenten
+	GameUI.CreateCrosshair()
+	GameUI.CreateHealthBar()
+	GameUI.CreateExpBar()
+	GameUI.CreateWaveDisplay()
+	GameUI.CreateWeaponBar()
+	GameUI.CreateAmmoDisplay()
+	GameUI.CreateBuildProgressUI()
+
+	-- Remote Event Handlers
+	GameUI.ConnectRemotes()
+
+	-- Kamera auf Third Person setzen
+	GameUI.SetupThirdPersonCamera()
+
+	print("[GameUI] Initialization complete!")
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- CROSSHAIR
+-- ═══════════════════════════════════════════════════════════════
+
+function GameUI.CreateCrosshair()
+	CrosshairFrame = Instance.new("Frame")
+	CrosshairFrame.Name = "Crosshair"
+	CrosshairFrame.Size = UDim2.new(0, 40, 0, 40)
+	CrosshairFrame.Position = UDim2.new(0.5, 0, 0.5, 0)
+	CrosshairFrame.AnchorPoint = Vector2.new(0.5, 0.5)
+	CrosshairFrame.BackgroundTransparency = 1
+	CrosshairFrame.Parent = MainGui
+
+	-- Crosshair Linien
+	local lineThickness = 2
+	local lineLength = 15
+	local gap = 5
+
+	-- Oben
+	local topLine = Instance.new("Frame")
+	topLine.Size = UDim2.new(0, lineThickness, 0, lineLength)
+	topLine.Position = UDim2.new(0.5, -lineThickness/2, 0.5, -gap - lineLength)
+	topLine.BackgroundColor3 = Color3.new(1, 1, 1)
+	topLine.BorderSizePixel = 0
+	topLine.Parent = CrosshairFrame
+
+	-- Unten
+	local bottomLine = Instance.new("Frame")
+	bottomLine.Size = UDim2.new(0, lineThickness, 0, lineLength)
+	bottomLine.Position = UDim2.new(0.5, -lineThickness/2, 0.5, gap)
+	bottomLine.BackgroundColor3 = Color3.new(1, 1, 1)
+	bottomLine.BorderSizePixel = 0
+	bottomLine.Parent = CrosshairFrame
+
+	-- Links
+	local leftLine = Instance.new("Frame")
+	leftLine.Size = UDim2.new(0, lineLength, 0, lineThickness)
+	leftLine.Position = UDim2.new(0.5, -gap - lineLength, 0.5, -lineThickness/2)
+	leftLine.BackgroundColor3 = Color3.new(1, 1, 1)
+	leftLine.BorderSizePixel = 0
+	leftLine.Parent = CrosshairFrame
+
+	-- Rechts
+	local rightLine = Instance.new("Frame")
+	rightLine.Size = UDim2.new(0, lineLength, 0, lineThickness)
+	rightLine.Position = UDim2.new(0.5, gap, 0.5, -lineThickness/2)
+	rightLine.BackgroundColor3 = Color3.new(1, 1, 1)
+	rightLine.BorderSizePixel = 0
+	rightLine.Parent = CrosshairFrame
+
+	-- Mittelpunkt
+	local center = Instance.new("Frame")
+	center.Size = UDim2.new(0, 4, 0, 4)
+	center.Position = UDim2.new(0.5, -2, 0.5, -2)
+	center.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
+	center.BorderSizePixel = 0
+	center.Parent = CrosshairFrame
+
+	local centerCorner = Instance.new("UICorner")
+	centerCorner.CornerRadius = UDim.new(1, 0)
+	centerCorner.Parent = center
+
+	-- Schatten für bessere Sichtbarkeit
+	for _, line in pairs(CrosshairFrame:GetChildren()) do
+		if line:IsA("Frame") then
+			local shadow = Instance.new("UIStroke")
+			shadow.Color = Color3.new(0, 0, 0)
+			shadow.Thickness = 1
+			shadow.Transparency = 0.5
+			shadow.Parent = line
+		end
+	end
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- HEALTH BAR
+-- ═══════════════════════════════════════════════════════════════
+
+function GameUI.CreateHealthBar()
+	local healthContainer = Instance.new("Frame")
+	healthContainer.Name = "HealthContainer"
+	healthContainer.Size = UDim2.new(0, 250, 0, 30)
+	healthContainer.Position = UDim2.new(0, 20, 1, -100)
+	healthContainer.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+	healthContainer.BackgroundTransparency = 0.3
+	healthContainer.BorderSizePixel = 0
+	healthContainer.Parent = MainGui
+
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 8)
+	corner.Parent = healthContainer
+
+	-- Icon
+	local healthIcon = Instance.new("ImageLabel")
+	healthIcon.Size = UDim2.new(0, 24, 0, 24)
+	healthIcon.Position = UDim2.new(0, 5, 0.5, -12)
+	healthIcon.BackgroundTransparency = 1
+	healthIcon.Image = "rbxassetid://6031265976" -- Heart icon
+	healthIcon.ImageColor3 = Color3.fromRGB(255, 100, 100)
+	healthIcon.Parent = healthContainer
+
+	-- Bar Background
+	local barBg = Instance.new("Frame")
+	barBg.Name = "BarBackground"
+	barBg.Size = UDim2.new(1, -40, 0, 20)
+	barBg.Position = UDim2.new(0, 35, 0.5, -10)
+	barBg.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+	barBg.BorderSizePixel = 0
+	barBg.Parent = healthContainer
+
+	local barBgCorner = Instance.new("UICorner")
+	barBgCorner.CornerRadius = UDim.new(0, 5)
+	barBgCorner.Parent = barBg
+
+	-- Health Bar Fill
+	HealthBar = Instance.new("Frame")
+	HealthBar.Name = "HealthFill"
+	HealthBar.Size = UDim2.new(1, 0, 1, 0)
+	HealthBar.BackgroundColor3 = Color3.fromRGB(220, 50, 50)
+	HealthBar.BorderSizePixel = 0
+	HealthBar.Parent = barBg
+
+	local fillCorner = Instance.new("UICorner")
+	fillCorner.CornerRadius = UDim.new(0, 5)
+	fillCorner.Parent = HealthBar
+
+	-- Gradient
+	local gradient = Instance.new("UIGradient")
+	gradient.Color = ColorSequence.new{
+		ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 100, 100)),
+		ColorSequenceKeypoint.new(1, Color3.fromRGB(180, 30, 30))
+	}
+	gradient.Rotation = 90
+	gradient.Parent = HealthBar
+
+	-- Health Text
+	local healthText = Instance.new("TextLabel")
+	healthText.Name = "HealthText"
+	healthText.Size = UDim2.new(1, 0, 1, 0)
+	healthText.BackgroundTransparency = 1
+	healthText.Text = "100/100"
+	healthText.TextColor3 = Color3.new(1, 1, 1)
+	healthText.TextScaled = true
+	healthText.Font = Enum.Font.GothamBold
+	healthText.Parent = barBg
+
+	local textStroke = Instance.new("UIStroke")
+	textStroke.Color = Color3.new(0, 0, 0)
+	textStroke.Thickness = 1
+	textStroke.Parent = healthText
+end
+
+function GameUI.UpdateHealthBar(current, max)
+	CurrentHealth = current
+	MaxHealth = max
+
+	local percent = math.clamp(current / max, 0, 1)
+
+	TweenService:Create(
+		HealthBar,
+		TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+		{Size = UDim2.new(percent, 0, 1, 0)}
+	):Play()
+
+	-- Update Text
+	local textLabel = HealthBar.Parent:FindFirstChild("HealthText")
+	if textLabel then
+		textLabel.Text = math.floor(current) .. "/" .. math.floor(max)
+	end
+
+	-- Farbe basierend auf Gesundheit
+	local color
+	if percent > 0.6 then
+		color = Color3.fromRGB(220, 50, 50)
+	elseif percent > 0.3 then
+		color = Color3.fromRGB(220, 150, 50)
+	else
+		color = Color3.fromRGB(150, 50, 50)
+	end
+
+	TweenService:Create(
+		HealthBar,
+		TweenInfo.new(0.3),
+		{BackgroundColor3 = color}
+	):Play()
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- EXP BAR
+-- ═══════════════════════════════════════════════════════════════
+
+function GameUI.CreateExpBar()
+	local expContainer = Instance.new("Frame")
+	expContainer.Name = "ExpContainer"
+	expContainer.Size = UDim2.new(0, 250, 0, 25)
+	expContainer.Position = UDim2.new(0, 20, 1, -60)
+	expContainer.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+	expContainer.BackgroundTransparency = 0.3
+	expContainer.BorderSizePixel = 0
+	expContainer.Parent = MainGui
+
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 8)
+	corner.Parent = expContainer
+
+	-- Level Label
+	LevelLabel = Instance.new("TextLabel")
+	LevelLabel.Name = "LevelLabel"
+	LevelLabel.Size = UDim2.new(0, 40, 1, 0)
+	LevelLabel.Position = UDim2.new(0, 5, 0, 0)
+	LevelLabel.BackgroundTransparency = 1
+	LevelLabel.Text = "LV.1"
+	LevelLabel.TextColor3 = Color3.fromRGB(255, 215, 0)
+	LevelLabel.TextScaled = true
+	LevelLabel.Font = Enum.Font.GothamBold
+	LevelLabel.Parent = expContainer
+
+	-- Bar Background
+	local barBg = Instance.new("Frame")
+	barBg.Name = "BarBackground"
+	barBg.Size = UDim2.new(1, -55, 0, 15)
+	barBg.Position = UDim2.new(0, 50, 0.5, -7.5)
+	barBg.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+	barBg.BorderSizePixel = 0
+	barBg.Parent = expContainer
+
+	local barBgCorner = Instance.new("UICorner")
+	barBgCorner.CornerRadius = UDim.new(0, 5)
+	barBgCorner.Parent = barBg
+
+	-- EXP Bar Fill
+	ExpBar = Instance.new("Frame")
+	ExpBar.Name = "ExpFill"
+	ExpBar.Size = UDim2.new(0, 0, 1, 0)
+	ExpBar.BackgroundColor3 = Color3.fromRGB(100, 200, 255)
+	ExpBar.BorderSizePixel = 0
+	ExpBar.Parent = barBg
+
+	local fillCorner = Instance.new("UICorner")
+	fillCorner.CornerRadius = UDim.new(0, 5)
+	fillCorner.Parent = ExpBar
+
+	-- Gradient
+	local gradient = Instance.new("UIGradient")
+	gradient.Color = ColorSequence.new{
+		ColorSequenceKeypoint.new(0, Color3.fromRGB(150, 220, 255)),
+		ColorSequenceKeypoint.new(1, Color3.fromRGB(50, 150, 255))
+	}
+	gradient.Rotation = 90
+	gradient.Parent = ExpBar
+
+	-- EXP Text
+	local expText = Instance.new("TextLabel")
+	expText.Name = "ExpText"
+	expText.Size = UDim2.new(1, 0, 1, 0)
+	expText.BackgroundTransparency = 1
+	expText.Text = "0/60"
+	expText.TextColor3 = Color3.new(1, 1, 1)
+	expText.TextScaled = true
+	expText.Font = Enum.Font.GothamBold
+	expText.Parent = barBg
+
+	local textStroke = Instance.new("UIStroke")
+	textStroke.Color = Color3.new(0, 0, 0)
+	textStroke.Thickness = 1
+	textStroke.Parent = expText
+end
+
+function GameUI.UpdateExpBar(current, max)
+	CurrentExp = current
+	MaxExp = max
+
+	local percent = math.clamp(current / max, 0, 1)
+
+	TweenService:Create(
+		ExpBar,
+		TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+		{Size = UDim2.new(percent, 0, 1, 0)}
+	):Play()
+
+	-- Update Text
+	local textLabel = ExpBar.Parent:FindFirstChild("ExpText")
+	if textLabel then
+		textLabel.Text = math.floor(current) .. "/" .. math.floor(max)
+	end
+end
+
+function GameUI.UpdateLevel(level)
+	CurrentLevel = level
+	if LevelLabel then
+		LevelLabel.Text = "LV." .. level
+	end
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- WAVE DISPLAY
+-- ═══════════════════════════════════════════════════════════════
+
+function GameUI.CreateWaveDisplay()
+	local waveContainer = Instance.new("Frame")
+	waveContainer.Name = "WaveContainer"
+	waveContainer.Size = UDim2.new(0, 200, 0, 50)
+	waveContainer.Position = UDim2.new(0.5, -100, 0, 20)
+	waveContainer.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+	waveContainer.BackgroundTransparency = 0.3
+	waveContainer.BorderSizePixel = 0
+	waveContainer.Parent = MainGui
+
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 10)
+	corner.Parent = waveContainer
+
+	WaveLabel = Instance.new("TextLabel")
+	WaveLabel.Name = "WaveLabel"
+	WaveLabel.Size = UDim2.new(1, 0, 1, 0)
+	WaveLabel.BackgroundTransparency = 1
+	WaveLabel.Text = "WELLE 1"
+	WaveLabel.TextColor3 = Color3.fromRGB(255, 50, 50)
+	WaveLabel.TextScaled = true
+	WaveLabel.Font = Enum.Font.GothamBlack
+	WaveLabel.Parent = waveContainer
+
+	local stroke = Instance.new("UIStroke")
+	stroke.Color = Color3.new(0, 0, 0)
+	stroke.Thickness = 2
+	stroke.Parent = WaveLabel
+end
+
+function GameUI.UpdateWave(waveNumber)
+	if WaveLabel then
+		WaveLabel.Text = "WELLE " .. waveNumber
+
+		-- Animation
+		TweenService:Create(
+			WaveLabel,
+			TweenInfo.new(0.2, Enum.EasingStyle.Back, Enum.EasingDirection.Out),
+			{TextSize = 36}
+		):Play()
+
+		task.delay(0.2, function()
+			TweenService:Create(
+				WaveLabel,
+				TweenInfo.new(0.3),
+				{TextSize = 28}
+			):Play()
+		end)
+	end
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- WEAPON BAR (1-9 Slots)
+-- ═══════════════════════════════════════════════════════════════
+
+function GameUI.CreateWeaponBar()
+	local weaponContainer = Instance.new("Frame")
+	weaponContainer.Name = "WeaponContainer"
+	weaponContainer.Size = UDim2.new(0, 450, 0, 60)
+	weaponContainer.Position = UDim2.new(0.5, -225, 1, -70)
+	weaponContainer.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+	weaponContainer.BackgroundTransparency = 0.3
+	weaponContainer.BorderSizePixel = 0
+	weaponContainer.Parent = MainGui
+
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 10)
+	corner.Parent = weaponContainer
+
+	local listLayout = Instance.new("UIListLayout")
+	listLayout.FillDirection = Enum.FillDirection.Horizontal
+	listLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+	listLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+	listLayout.Padding = UDim.new(0, 5)
+	listLayout.Parent = weaponContainer
+
+	-- Erstelle 9 Weapon Slots
+	for i = 1, 9 do
+		local slot = Instance.new("TextButton")
+		slot.Name = "WeaponSlot" .. i
+		slot.Size = UDim2.new(0, 45, 0, 50)
+		slot.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+		slot.BorderSizePixel = 0
+		slot.Text = ""
+		slot.Parent = weaponContainer
+
+		local slotCorner = Instance.new("UICorner")
+		slotCorner.CornerRadius = UDim.new(0, 8)
+		slotCorner.Parent = slot
+
+		-- Nummer
+		local numberLabel = Instance.new("TextLabel")
+		numberLabel.Name = "Number"
+		numberLabel.Size = UDim2.new(0, 15, 0, 15)
+		numberLabel.Position = UDim2.new(0, 2, 0, 2)
+		numberLabel.BackgroundTransparency = 1
+		numberLabel.Text = tostring(i)
+		numberLabel.TextColor3 = Color3.new(1, 1, 1)
+		numberLabel.TextScaled = true
+		numberLabel.Font = Enum.Font.GothamBold
+		numberLabel.Parent = slot
+
+		-- Icon Platzhalter (später durch echte Icons ersetzen)
+		local iconLabel = Instance.new("ImageLabel")
+		iconLabel.Name = "Icon"
+		iconLabel.Size = UDim2.new(0, 30, 0, 30)
+		iconLabel.Position = UDim2.new(0.5, -15, 0.5, -10)
+		iconLabel.BackgroundTransparency = 1
+		iconLabel.Image = "" -- Wird später gefüllt
+		iconLabel.ImageColor3 = Color3.new(1, 1, 1)
+		iconLabel.Parent = slot
+
+		-- Lock Icon für gesperrte Waffen
+		local lockIcon = Instance.new("ImageLabel")
+		lockIcon.Name = "Lock"
+		lockIcon.Size = UDim2.new(0, 20, 0, 20)
+		lockIcon.Position = UDim2.new(0.5, -10, 0.5, -5)
+		lockIcon.BackgroundTransparency = 1
+		lockIcon.Image = "rbxassetid://6031229344" -- Lock icon
+		lockIcon.ImageColor3 = Color3.fromRGB(150, 150, 150)
+		lockIcon.Visible = i > 1 -- Alle außer Pistole gesperrt
+		lockIcon.Parent = slot
+
+		-- Waffen-Name Tooltip
+		slot:SetAttribute("WeaponName", GameConfig.Weapons[i] and GameConfig.Weapons[i].Name or "")
+
+		-- Click Handler
+		slot.MouseButton1Click:Connect(function()
+			GameUI.SelectWeapon(i)
+		end)
+
+		WeaponSlots[i] = slot
+	end
+
+	-- Keyboard Input für 1-9
+	UserInputService.InputBegan:Connect(function(input, gameProcessed)
+		if gameProcessed then return end
+
+		local keyNumber = nil
+		if input.KeyCode == Enum.KeyCode.One then keyNumber = 1
+		elseif input.KeyCode == Enum.KeyCode.Two then keyNumber = 2
+		elseif input.KeyCode == Enum.KeyCode.Three then keyNumber = 3
+		elseif input.KeyCode == Enum.KeyCode.Four then keyNumber = 4
+		elseif input.KeyCode == Enum.KeyCode.Five then keyNumber = 5
+		elseif input.KeyCode == Enum.KeyCode.Six then keyNumber = 6
+		elseif input.KeyCode == Enum.KeyCode.Seven then keyNumber = 7
+		elseif input.KeyCode == Enum.KeyCode.Eight then keyNumber = 8
+		elseif input.KeyCode == Enum.KeyCode.Nine then keyNumber = 9
+		end
+
+		if keyNumber then
+			GameUI.SelectWeapon(keyNumber)
+		end
+	end)
+
+	-- Initial Update
+	GameUI.UpdateWeaponSlots()
+end
+
+function GameUI.SelectWeapon(slotNumber)
+	-- Prüfe ob freigeschaltet
+	local isUnlocked = false
+	for _, slot in pairs(UnlockedWeapons) do
+		if slot == slotNumber then
+			isUnlocked = true
+			break
+		end
+	end
+
+	if not isUnlocked then
+		-- Feedback: Gesperrt
+		local slot = WeaponSlots[slotNumber]
+		if slot then
+			TweenService:Create(
+				slot,
+				TweenInfo.new(0.1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out, 0, true),
+				{BackgroundColor3 = Color3.fromRGB(150, 50, 50)}
+			):Play()
+		end
+		return
+	end
+
+	SelectedWeapon = slotNumber
+
+	-- Sende an Server
+	local equipRemote = Remotes:FindFirstChild("WeaponEquip")
+	if equipRemote then
+		equipRemote:FireServer(slotNumber)
+	end
+
+	GameUI.UpdateWeaponSlots()
+end
+
+function GameUI.UpdateWeaponSlots()
+	for i, slot in pairs(WeaponSlots) do
+		local isUnlocked = false
+		for _, unlockedSlot in pairs(UnlockedWeapons) do
+			if unlockedSlot == i then
+				isUnlocked = true
+				break
+			end
+		end
+
+		local lockIcon = slot:FindFirstChild("Lock")
+		if lockIcon then
+			lockIcon.Visible = not isUnlocked
+		end
+
+		-- Highlight ausgewählte Waffe
+		if i == SelectedWeapon then
+			slot.BackgroundColor3 = Color3.fromRGB(100, 150, 200)
+			TweenService:Create(
+				slot,
+				TweenInfo.new(0.2),
+				{Size = UDim2.new(0, 50, 0, 55)}
+			):Play()
+		else
+			if isUnlocked then
+				slot.BackgroundColor3 = Color3.fromRGB(70, 70, 70)
+			else
+				slot.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+			end
+			TweenService:Create(
+				slot,
+				TweenInfo.new(0.2),
+				{Size = UDim2.new(0, 45, 0, 50)}
+			):Play()
+		end
+	end
+end
+
+function GameUI.UpdateUnlockedWeapons(unlocked)
+	UnlockedWeapons = unlocked
+	GameUI.UpdateWeaponSlots()
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- AMMO DISPLAY
+-- ═══════════════════════════════════════════════════════════════
+
+function GameUI.CreateAmmoDisplay()
+	local ammoContainer = Instance.new("Frame")
+	ammoContainer.Name = "AmmoContainer"
+	ammoContainer.Size = UDim2.new(0, 120, 0, 40)
+	ammoContainer.Position = UDim2.new(1, -140, 1, -100)
+	ammoContainer.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+	ammoContainer.BackgroundTransparency = 0.3
+	ammoContainer.BorderSizePixel = 0
+	ammoContainer.Parent = MainGui
+
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 8)
+	corner.Parent = ammoContainer
+
+	-- Ammo Icon
+	local ammoIcon = Instance.new("ImageLabel")
+	ammoIcon.Size = UDim2.new(0, 30, 0, 30)
+	ammoIcon.Position = UDim2.new(0, 5, 0.5, -15)
+	ammoIcon.BackgroundTransparency = 1
+	ammoIcon.Image = "rbxassetid://6034684930" -- Bullet icon
+	ammoIcon.ImageColor3 = Color3.fromRGB(255, 200, 100)
+	ammoIcon.Parent = ammoContainer
+
+	AmmoLabel = Instance.new("TextLabel")
+	AmmoLabel.Name = "AmmoLabel"
+	AmmoLabel.Size = UDim2.new(1, -45, 1, 0)
+	AmmoLabel.Position = UDim2.new(0, 40, 0, 0)
+	AmmoLabel.BackgroundTransparency = 1
+	AmmoLabel.Text = "12/12"
+	AmmoLabel.TextColor3 = Color3.new(1, 1, 1)
+	AmmoLabel.TextScaled = true
+	AmmoLabel.Font = Enum.Font.GothamBold
+	AmmoLabel.TextXAlignment = Enum.TextXAlignment.Left
+	AmmoLabel.Parent = ammoContainer
+
+	local stroke = Instance.new("UIStroke")
+	stroke.Color = Color3.new(0, 0, 0)
+	stroke.Thickness = 1
+	stroke.Parent = AmmoLabel
+end
+
+function GameUI.UpdateAmmo(current, max)
+	CurrentAmmo = current
+	MaxAmmo = max
+
+	if AmmoLabel then
+		AmmoLabel.Text = current .. "/" .. max
+
+		-- Farbe basierend auf Ammo
+		if current == 0 then
+			AmmoLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
+		elseif current < max * 0.3 then
+			AmmoLabel.TextColor3 = Color3.fromRGB(255, 200, 100)
+		else
+			AmmoLabel.TextColor3 = Color3.new(1, 1, 1)
+		end
+	end
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- BUILD PROGRESS UI
+-- ═══════════════════════════════════════════════════════════════
+
+function GameUI.CreateBuildProgressUI()
+	local buildContainer = Instance.new("Frame")
+	buildContainer.Name = "BuildProgressContainer"
+	buildContainer.Size = UDim2.new(0, 300, 0, 60)
+	buildContainer.Position = UDim2.new(0.5, -150, 0.7, 0)
+	buildContainer.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+	buildContainer.BackgroundTransparency = 0.3
+	buildContainer.BorderSizePixel = 0
+	buildContainer.Visible = false
+	buildContainer.Parent = MainGui
+
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 10)
+	corner.Parent = buildContainer
+
+	-- Status Label
+	local statusLabel = Instance.new("TextLabel")
+	statusLabel.Name = "StatusLabel"
+	statusLabel.Size = UDim2.new(1, 0, 0, 25)
+	statusLabel.Position = UDim2.new(0, 0, 0, 5)
+	statusLabel.BackgroundTransparency = 1
+	statusLabel.Text = "Stehe auf Bauplatz..."
+	statusLabel.TextColor3 = Color3.new(1, 1, 1)
+	statusLabel.TextScaled = true
+	statusLabel.Font = Enum.Font.GothamBold
+	statusLabel.Parent = buildContainer
+
+	-- Progress Bar Background
+	local barBg = Instance.new("Frame")
+	barBg.Name = "BarBackground"
+	barBg.Size = UDim2.new(0.9, 0, 0, 20)
+	barBg.Position = UDim2.new(0.05, 0, 0.55, 0)
+	barBg.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+	barBg.BorderSizePixel = 0
+	barBg.Parent = buildContainer
+
+	local barBgCorner = Instance.new("UICorner")
+	barBgCorner.CornerRadius = UDim.new(0, 5)
+	barBgCorner.Parent = barBg
+
+	-- Progress Bar Fill
+	BuildProgressBar = Instance.new("Frame")
+	BuildProgressBar.Name = "ProgressFill"
+	BuildProgressBar.Size = UDim2.new(0, 0, 1, 0)
+	BuildProgressBar.BackgroundColor3 = Color3.fromRGB(100, 200, 100)
+	BuildProgressBar.BorderSizePixel = 0
+	BuildProgressBar.Parent = barBg
+
+	local fillCorner = Instance.new("UICorner")
+	fillCorner.CornerRadius = UDim.new(0, 5)
+	fillCorner.Parent = BuildProgressBar
+end
+
+function GameUI.UpdateBuildProgress(fenceName, progress, phase)
+	local container = MainGui:FindFirstChild("BuildProgressContainer")
+	if not container then return end
+
+	if phase == "cancelled" then
+		container.Visible = false
+		return
+	end
+
+	container.Visible = true
+
+	local statusLabel = container:FindFirstChild("StatusLabel")
+	if statusLabel then
+		if phase == "standing" then
+			statusLabel.Text = "Stehe auf Bauplatz... (" .. fenceName .. ")"
+			BuildProgressBar.BackgroundColor3 = Color3.fromRGB(200, 200, 100)
+		elseif phase == "building" then
+			statusLabel.Text = "Baue Zaun... (" .. fenceName .. ")"
+			BuildProgressBar.BackgroundColor3 = Color3.fromRGB(100, 200, 100)
+		end
+	end
+
+	TweenService:Create(
+		BuildProgressBar,
+		TweenInfo.new(0.1),
+		{Size = UDim2.new(progress, 0, 1, 0)}
+	):Play()
+end
+
+function GameUI.HideBuildProgress()
+	local container = MainGui:FindFirstChild("BuildProgressContainer")
+	if container then
+		container.Visible = false
+	end
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- THIRD PERSON CAMERA
+-- ═══════════════════════════════════════════════════════════════
+
+function GameUI.SetupThirdPersonCamera()
+	player.CameraMode = Enum.CameraMode.Classic
+	player.CameraMaxZoomDistance = 15
+	player.CameraMinZoomDistance = 5
+
+	-- Starte mit Zoom-Out
+	local camera = workspace.CurrentCamera
+	if camera then
+		task.wait(0.5)
+		-- Setze initiale Kamera-Distanz
+	end
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- REMOTE HANDLERS
+-- ═══════════════════════════════════════════════════════════════
+
+function GameUI.ConnectRemotes()
+	-- Player Data Updates
+	PlayerDataRemote.OnClientEvent:Connect(function(updateType, data, extra)
+		if updateType == "FullSync" then
+			CurrentLevel = data.Level
+			CurrentExp = data.CurrentExp
+			MaxExp = data.MaxExp
+			MaxHealth = data.MaxHealth
+			CurrentHealth = data.CurrentHealth
+			SelectedWeapon = data.SelectedWeapon
+			UnlockedWeapons = data.UnlockedWeapons
+
+			GameUI.UpdateLevel(CurrentLevel)
+			GameUI.UpdateExpBar(CurrentExp, MaxExp)
+			GameUI.UpdateHealthBar(CurrentHealth, MaxHealth)
+			GameUI.UpdateWeaponSlots()
+		elseif updateType == "HealthUpdate" then
+			GameUI.UpdateHealthBar(data, extra)
+		end
+	end)
+
+	-- EXP Gained
+	ExpGainedRemote.OnClientEvent:Connect(function(amount, current, max)
+		GameUI.UpdateExpBar(current, max)
+
+		-- Floating Text Effect (optional)
+		GameUI.ShowFloatingText("+" .. amount .. " EXP", Color3.fromRGB(100, 200, 255))
+	end)
+
+	-- Level Up
+	LevelUpRemote.OnClientEvent:Connect(function(newLevel, unlocked)
+		CurrentLevel = newLevel
+		UnlockedWeapons = unlocked
+
+		GameUI.UpdateLevel(newLevel)
+		GameUI.UpdateUnlockedWeapons(unlocked)
+		GameUI.UpdateExpBar(0, GameConfig.GetExpForLevel(newLevel))
+
+		-- Level Up Animation
+		GameUI.ShowLevelUpEffect(newLevel)
+	end)
+
+	-- Wave Updates
+	WaveUpdateRemote.OnClientEvent:Connect(function(eventType, waveNumber, extra)
+		if eventType == "WaveStart" then
+			GameUI.UpdateWave(waveNumber)
+			GameUI.ShowWaveAnnouncement(waveNumber, extra)
+		elseif eventType == "WaveEnd" then
+			GameUI.ShowWaveCompleteEffect(waveNumber)
+		end
+	end)
+
+	-- Weapon Fire (Ammo Update)
+	WeaponFireRemote.OnClientEvent:Connect(function(current, max)
+		GameUI.UpdateAmmo(current, max)
+	end)
+
+	-- Build Progress
+	FenceBuildProgressRemote.OnClientEvent:Connect(function(fenceName, progress, phase)
+		GameUI.UpdateBuildProgress(fenceName, progress, phase)
+	end)
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- EFFEKTE
+-- ═══════════════════════════════════════════════════════════════
+
+function GameUI.ShowFloatingText(text, color)
+	local floatingText = Instance.new("TextLabel")
+	floatingText.Size = UDim2.new(0, 200, 0, 30)
+	floatingText.Position = UDim2.new(0.5, -100, 0.4, 0)
+	floatingText.BackgroundTransparency = 1
+	floatingText.Text = text
+	floatingText.TextColor3 = color or Color3.new(1, 1, 1)
+	floatingText.TextScaled = true
+	floatingText.Font = Enum.Font.GothamBold
+	floatingText.Parent = MainGui
+
+	local stroke = Instance.new("UIStroke")
+	stroke.Color = Color3.new(0, 0, 0)
+	stroke.Thickness = 2
+	stroke.Parent = floatingText
+
+	-- Animation
+	TweenService:Create(
+		floatingText,
+		TweenInfo.new(1.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+		{Position = UDim2.new(0.5, -100, 0.3, 0), TextTransparency = 1}
+	):Play()
+
+	task.delay(1.5, function()
+		floatingText:Destroy()
+	end)
+end
+
+function GameUI.ShowLevelUpEffect(level)
+	local levelUpFrame = Instance.new("Frame")
+	levelUpFrame.Size = UDim2.new(0, 300, 0, 100)
+	levelUpFrame.Position = UDim2.new(0.5, -150, 0.4, -50)
+	levelUpFrame.BackgroundColor3 = Color3.fromRGB(255, 215, 0)
+	levelUpFrame.BackgroundTransparency = 0.3
+	levelUpFrame.BorderSizePixel = 0
+	levelUpFrame.Parent = MainGui
+
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 15)
+	corner.Parent = levelUpFrame
+
+	local text = Instance.new("TextLabel")
+	text.Size = UDim2.new(1, 0, 1, 0)
+	text.BackgroundTransparency = 1
+	text.Text = "LEVEL UP!\nLevel " .. level
+	text.TextColor3 = Color3.new(1, 1, 1)
+	text.TextScaled = true
+	text.Font = Enum.Font.GothamBlack
+	text.Parent = levelUpFrame
+
+	local stroke = Instance.new("UIStroke")
+	stroke.Color = Color3.new(0, 0, 0)
+	stroke.Thickness = 2
+	stroke.Parent = text
+
+	-- Animation
+	TweenService:Create(
+		levelUpFrame,
+		TweenInfo.new(0.3, Enum.EasingStyle.Back, Enum.EasingDirection.Out),
+		{Size = UDim2.new(0, 350, 0, 120)}
+	):Play()
+
+	task.delay(2, function()
+		TweenService:Create(
+			levelUpFrame,
+			TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
+			{BackgroundTransparency = 1}
+		):Play()
+		TweenService:Create(
+			text,
+			TweenInfo.new(0.5),
+			{TextTransparency = 1}
+		):Play()
+
+		task.delay(0.5, function()
+			levelUpFrame:Destroy()
+		end)
+	end)
+end
+
+function GameUI.ShowWaveAnnouncement(waveNumber, zombieCount)
+	local waveFrame = Instance.new("Frame")
+	waveFrame.Size = UDim2.new(0, 400, 0, 80)
+	waveFrame.Position = UDim2.new(0.5, -200, 0.3, -40)
+	waveFrame.BackgroundColor3 = Color3.fromRGB(150, 30, 30)
+	waveFrame.BackgroundTransparency = 0.3
+	waveFrame.BorderSizePixel = 0
+	waveFrame.Parent = MainGui
+
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 15)
+	corner.Parent = waveFrame
+
+	local text = Instance.new("TextLabel")
+	text.Size = UDim2.new(1, 0, 0.6, 0)
+	text.BackgroundTransparency = 1
+	text.Text = "WELLE " .. waveNumber
+	text.TextColor3 = Color3.new(1, 1, 1)
+	text.TextScaled = true
+	text.Font = Enum.Font.GothamBlack
+	text.Parent = waveFrame
+
+	local subText = Instance.new("TextLabel")
+	subText.Size = UDim2.new(1, 0, 0.4, 0)
+	subText.Position = UDim2.new(0, 0, 0.6, 0)
+	subText.BackgroundTransparency = 1
+	subText.Text = zombieCount .. " Zombies incoming!"
+	subText.TextColor3 = Color3.fromRGB(200, 200, 200)
+	subText.TextScaled = true
+	subText.Font = Enum.Font.Gotham
+	subText.Parent = waveFrame
+
+	-- Fade Out nach 3 Sekunden
+	task.delay(3, function()
+		TweenService:Create(
+			waveFrame,
+			TweenInfo.new(0.5),
+			{BackgroundTransparency = 1}
+		):Play()
+		TweenService:Create(
+			text,
+			TweenInfo.new(0.5),
+			{TextTransparency = 1}
+		):Play()
+		TweenService:Create(
+			subText,
+			TweenInfo.new(0.5),
+			{TextTransparency = 1}
+		):Play()
+
+		task.delay(0.5, function()
+			waveFrame:Destroy()
+		end)
+	end)
+end
+
+function GameUI.ShowWaveCompleteEffect(waveNumber)
+	GameUI.ShowFloatingText("Welle " .. waveNumber .. " geschafft!", Color3.fromRGB(100, 255, 100))
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- INITIALIZATION
+-- ═══════════════════════════════════════════════════════════════
+
+GameUI.Initialize()
+
+return GameUI

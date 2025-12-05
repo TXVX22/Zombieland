@@ -1,0 +1,258 @@
+-- SoldierSkinData Module - FIXED mit korrekten Umlauten
+-- Location: ReplicatedStorage/SoldierSkinData (ModuleScript)
+
+local SoldierSkinData = {}
+
+-- WICHTIG: Exakte Model-Namen wie sie in Assets/Soldiers sind!
+SoldierSkinData.Skins = {
+	-- Stone Age (Reihenfolge 1)
+	{
+		name = "Höhlenmensch", -- KORREKT mit Umlaut
+		displayName = "Höhlenmensch",
+		icon = "rbxassetid://79273267360545",
+		description = "Der klassische Steinzeit-Krieger",
+		epoch = "StoneAge",
+		epochOrder = 1,
+		panzaroPrice = 0, -- Default skin - kostenlos
+		robuxPrice = 0,
+		rarity = "Common",
+		isDefault = true
+	},
+	{
+		name = "Bogenschütze", -- KORREKT mit Umlaut
+		displayName = "Bogenschütze",
+		icon = "rbxassetid://139734520464651",
+		description = "Präzise aus der Ferne",
+		epoch = "StoneAge",
+		epochOrder = 1,
+		panzaroPrice = 0,
+		robuxPrice = 50,
+		rarity = "Rare",
+		isDefault = false
+	},
+	{
+		name = "Goblin",
+		displayName = "Goblin",
+		icon = "rbxassetid://96239893717614",
+		description = "Klein aber gemein",
+		epoch = "StoneAge",
+		epochOrder = 1,
+		panzaroPrice = 0,
+		robuxPrice = 75,
+		rarity = "Epic",
+		isDefault = false
+	},
+
+	-- Medieval (Reihenfolge 2)
+	{
+		name = "Ritter",
+		displayName = "Ritter",
+		icon = "rbxassetid://71456877564123",
+		description = "Gepanzerter Ehrenmann",
+		epoch = "Medieval",
+		epochOrder = 2,
+		panzaroPrice = 0,
+		robuxPrice = 0,
+		rarity = "Common",
+		isDefault = true
+	},
+	{
+		name = "Armbrustschütze", -- KORREKT mit Umlaut
+		displayName = "Armbrustschütze",
+		icon = "rbxassetid://125512201578347",
+		description = "Mittelalterlicher Scharfschütze",
+		epoch = "Medieval",
+		epochOrder = 2,
+		panzaroPrice = 0,
+		robuxPrice = 60,
+		rarity = "Rare",
+		isDefault = false
+	},
+	{
+		name = "Magier",
+		displayName = "Magier",
+		icon = "rbxassetid://84475890372072",
+		description = "Meister der arkanen Künste",
+		epoch = "Medieval",
+		epochOrder = 2,
+		panzaroPrice = 0,
+		robuxPrice = 100,
+		rarity = "Legendary",
+		isDefault = false
+	},
+
+	-- Industrial (Reihenfolge 3)
+	{
+		name = "Guard",
+		displayName = "Wächter",
+		icon = "rbxassetid://137334234256544",
+		description = "Industrieller Beschützer",
+		epoch = "Industrial",
+		epochOrder = 3,
+		panzaroPrice = 0,
+		robuxPrice = 0,
+		rarity = "Common",
+		isDefault = true
+	},
+	{
+		name = "Wächter", -- Möglicherweise auch mit Umlaut im Model
+		displayName = "Elite Wächter",
+		icon = "rbxassetid://120915144318393",
+		description = "Verstärkter Fabrikwächter",
+		epoch = "Industrial",
+		epochOrder = 3,
+		panzaroPrice = 0,
+		robuxPrice = 70,
+		rarity = "Rare",
+		isDefault = false
+	},
+	{
+		name = "Professor",
+		displayName = "Professor",
+		icon = "rbxassetid://84871660559159",
+		description = "Wissenschaftler mit Kampferfahrung",
+		epoch = "Industrial",
+		epochOrder = 3,
+		panzaroPrice = 0,
+		robuxPrice = 120,
+		rarity = "Legendary",
+		isDefault = false
+	},
+
+	-- Modern (Reihenfolge 4)
+	{
+		name = "ModernNahkämpfer", -- Möglicherweise mit Umlaut
+		displayName = "Nahkämpfer",
+		icon = "rbxassetid://112474586741293",
+		description = "Moderner Frontkämpfer",
+		epoch = "Modern",
+		epochOrder = 4,
+		panzaroPrice = 0,
+		robuxPrice = 0,
+		rarity = "Common",
+		isDefault = true
+	},
+	{
+		name = "UziSoldier",
+		displayName = "Uzi Soldat",
+		icon = "rbxassetid://96990246771522",
+		description = "Schnellfeuer-Spezialist",
+		epoch = "Modern",
+		epochOrder = 4,
+		panzaroPrice = 0,
+		robuxPrice = 80,
+		rarity = "Epic",
+		isDefault = false
+	},
+	
+
+	-- Future (Reihenfolge 5)
+	{
+		name = "RobotNah",
+		displayName = "Nahkampf-Roboter",
+		icon = "rbxassetid://121257135293176",
+		description = "Kybernetischer Krieger",
+		epoch = "Future",
+		epochOrder = 5,
+		panzaroPrice = 0,
+		robuxPrice = 0,
+		rarity = "Common",
+		isDefault = true
+	},
+	{
+		name = "RobotGun",
+		displayName = "Schützen-Roboter",
+		icon = "rbxassetid://95979354277507",
+		description = "Präzisions-Android",
+		epoch = "Future",
+		epochOrder = 5,
+		panzaroPrice = 0,
+		robuxPrice = 90,
+		rarity = "Epic",
+		isDefault = false
+	},
+	{
+		name = "BadAss",
+		displayName = "Bad Ass",
+		icon = "rbxassetid://109898670576790",
+		description = "Der ultimative Zukunftskrieger",
+		epoch = "Future",
+		epochOrder = 5,
+		panzaroPrice = 0,
+		robuxPrice = 200,
+		rarity = "Mythic",
+		isDefault = false
+	},
+	{
+		name = "ZukunftsPanzer",
+		displayName = "Zukunfts-Panzer",
+		icon = "rbxassetid://133651932866961",
+		description = "Schwerer Mech-Anzug",
+		epoch = "Future",
+		epochOrder = 5,
+		panzaroPrice = 0,
+		robuxPrice = 180,
+		rarity = "Legendary",
+		isDefault = false
+	}
+}
+
+-- Sortiere nach Epochen-Reihenfolge und dann nach Preis
+table.sort(SoldierSkinData.Skins, function(a, b)
+	if a.epochOrder == b.epochOrder then
+		return a.panzaroPrice < b.panzaroPrice
+	end
+	return a.epochOrder < b.epochOrder
+end)
+
+-- Helper function mit Umlaut-Unterstützung
+function SoldierSkinData:GetSkin(skinName)
+	-- Direkte Suche
+	for _, skin in ipairs(self.Skins) do
+		if skin.name == skinName then
+			return skin
+		end
+	end
+
+	-- Suche mit Umlaut-Varianten
+	local variations = {
+		skinName,
+		skinName:gsub("oe", "ö"):gsub("Oe", "Ö"),
+		skinName:gsub("ae", "ä"):gsub("Ae", "Ä"),
+		skinName:gsub("ue", "ü"):gsub("Ue", "Ü"),
+		skinName:gsub("ö", "oe"):gsub("Ö", "Oe"),
+		skinName:gsub("ä", "ae"):gsub("Ä", "Ae"),
+		skinName:gsub("ü", "ue"):gsub("Ü", "Ue")
+	}
+
+	for _, variant in ipairs(variations) do
+		for _, skin in ipairs(self.Skins) do
+			if skin.name == variant or skin.name:lower() == variant:lower() then
+				return skin
+			end
+		end
+	end
+
+	return nil
+end
+
+function SoldierSkinData:GetSkinsForEpoch(epoch)
+	local skins = {}
+	for _, skin in ipairs(self.Skins) do
+		if skin.epoch == epoch then
+			table.insert(skins, skin)
+		end
+	end
+	return skins
+end
+
+function SoldierSkinData:GetDefaultSkin(epoch)
+	for _, skin in ipairs(self.Skins) do
+		if skin.epoch == epoch and skin.isDefault then
+			return skin
+		end
+	end
+	return nil
+end
+
+return SoldierSkinData

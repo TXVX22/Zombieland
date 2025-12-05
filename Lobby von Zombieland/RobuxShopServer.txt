@@ -1,0 +1,367 @@
+-- ROBUX SHOP SERVER EXTENSION
+-- Location: ServerScriptService/RobuxShopServer (Script)
+-- This works alongside your existing FixedShopServer
+
+local MarketplaceService = game:GetService("MarketplaceService")
+local Players = game:GetService("Players")
+local DataStoreService = game:GetService("DataStoreService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+-- DataStores (same as main shop)
+local robuxPurchaseStore = DataStoreService:GetDataStore("RobuxPurchases_v1")
+
+-- Wait for modules
+local UltimateData = require(ReplicatedStorage:WaitForChild("UltimateData"))
+local SoldierSkinData = require(ReplicatedStorage:WaitForChild("SoldierSkinData"))
+
+-- ===== DEVELOPER PRODUCT IDS =====
+-- ECHTE PRODUCT IDs - NICHT ÄNDERN!
+local PRODUCT_IDS = {
+	-- Panzaro Packages
+	PANZARO_100 = 3372705301,    -- 100 Panzaro for 25 Robux
+	PANZARO_500 = 3372705585,    -- 500 Panzaro for 99 Robux
+	PANZARO_1000 = 3372705801,   -- 1000 Panzaro for 179 Robux
+	PANZARO_5000 = 3372706066,   -- 5000 Panzaro for 799 Robux
+	PANZARO_10000 = 3372706341,  -- 10000 Panzaro for 1499 Robux
+
+	-- Direct Ultimate Purchases (dynamically generated)
+	-- Format: ULTIMATE_[ULTIMATENAME] = productId
+
+	-- Direct Skin Purchases (dynamically generated)
+	-- Format: SKIN_[SKINNAME] = productId
+
+	-- Mythic Uses
+	MYTHIC_5 = 3372706773,        -- 5 Mythic Uses for 99 Robux
+	MYTHIC_10 = 3372707040,       -- 10 Mythic Uses for 179 Robux
+	MYTHIC_25 = 3372707194,       -- 25 Mythic Uses for 399 Robux
+
+	-- VIP Pass
+	VIP_PASS = 3372708502,        -- VIP Pass for 499 Robux (using 499R product)
+}
+
+-- Product Details (what each product gives)
+local PRODUCT_DETAILS = {
+	[PRODUCT_IDS.PANZARO_100] = {type = "panzaro", amount = 100},
+	[PRODUCT_IDS.PANZARO_500] = {type = "panzaro", amount = 500},
+	[PRODUCT_IDS.PANZARO_1000] = {type = "panzaro", amount = 1000},
+	[PRODUCT_IDS.PANZARO_5000] = {type = "panzaro", amount = 5000},
+	[PRODUCT_IDS.PANZARO_10000] = {type = "panzaro", amount = 10000},
+
+	[PRODUCT_IDS.MYTHIC_5] = {type = "mythicuses", amount = 5},
+	[PRODUCT_IDS.MYTHIC_10] = {type = "mythicuses", amount = 10},
+	[PRODUCT_IDS.MYTHIC_25] = {type = "mythicuses", amount = 25},
+
+	[PRODUCT_IDS.VIP_PASS] = {type = "vippass"},
+}
+
+-- Create/Get Robux RemoteEvents
+local remotesFolder = ReplicatedStorage:WaitForChild("ShopRemotes")
+
+local robuxPurchase = Instance.new("RemoteFunction")
+robuxPurchase.Name = "RobuxPurchase"
+robuxPurchase.Parent = remotesFolder
+
+local getRobuxPrices = Instance.new("RemoteFunction")
+getRobuxPrices.Name = "GetRobuxPrices"
+getRobuxPrices.Parent = remotesFolder
+
+-- ===== ROBUX PRICING =====
+-- Define Robux prices for items (you can adjust these)
+local ROBUX_PRICES = {
+	-- Ultimates by rarity
+	ULTIMATE_COMMON = 49,
+	ULTIMATE_RARE = 99,
+	ULTIMATE_EPIC = 199,
+	ULTIMATE_LEGENDARY = 399,
+	ULTIMATE_MYTHIC = 799,
+
+	-- Skins by rarity
+	SKIN_COMMON = 29,
+	SKIN_RARE = 59,
+	SKIN_EPIC = 119,
+	SKIN_LEGENDARY = 249,
+
+	-- Fixed prices
+	VIP_PASS = 499,
+}
+
+-- Get Robux price for an item
+local function getItemRobuxPrice(itemType, itemName)
+	if itemType == "ultimate" then
+		local ultimateData = UltimateData:GetUltimate(itemName)
+		if ultimateData then
+			local rarity = ultimateData.rarity or "Common"
+			return ROBUX_PRICES["ULTIMATE_" .. rarity:upper()] or 99
+		end
+	elseif itemType == "skin" then
+		local skinData = SoldierSkinData:GetSkin(itemName)
+		if skinData then
+			local rarity = skinData.rarity or "Common"
+			return ROBUX_PRICES["SKIN_" .. rarity:upper()] or 59
+		end
+	elseif itemType == "vippass" then
+		return ROBUX_PRICES.VIP_PASS
+	end
+	return nil
+end
+
+-- ===== PURCHASE HANDLER =====
+local function processReceipt(receiptInfo)
+	local player = Players:GetPlayerByUserId(receiptInfo.PlayerId)
+	if not player then
+		return Enum.ProductPurchaseDecision.NotProcessedYet
+	end
+
+	-- Check if already processed
+	local purchaseId = receiptInfo.PlayerId .. "_" .. receiptInfo.PurchaseId
+	local success, alreadyProcessed = pcall(function()
+		return robuxPurchaseStore:GetAsync(purchaseId)
+	end)
+
+	if success and alreadyProcessed then
+		return Enum.ProductPurchaseDecision.PurchaseGranted
+	end
+
+	-- Get product details
+	local productDetails = PRODUCT_DETAILS[receiptInfo.ProductId]
+	if not productDetails then
+		-- Check for dynamic product (stored in player's pending purchase)
+		local pendingPurchase = player:GetAttribute("PendingRobuxPurchase")
+		if pendingPurchase then
+			-- Parse the pending purchase
+			local itemType, itemName = pendingPurchase:match("([^:]+):(.+)")
+			if itemType and itemName then
+				productDetails = {type = itemType, item = itemName}
+			end
+		end
+	end
+
+	if not productDetails then
+		warn("[ROBUX SHOP] Unknown product ID:", receiptInfo.ProductId)
+		return Enum.ProductPurchaseDecision.NotProcessedYet
+	end
+
+	-- Process based on type
+	local grantSuccess = false
+
+	if productDetails.type == "panzaro" then
+		-- Grant Panzaro
+		if _G.SetPlayerPanzaro then
+			local currentPanzaro = _G.GetPlayerPanzaro(player) or 0
+			_G.SetPlayerPanzaro(player, currentPanzaro + productDetails.amount)
+			grantSuccess = true
+			print("[ROBUX SHOP] Granted", productDetails.amount, "Panzaro to", player.Name)
+		end
+
+	elseif productDetails.type == "mythicuses" then
+		-- Grant Mythic Uses
+		if _G.ShopPlayerData and _G.ShopPlayerData[player] then
+			local data = _G.ShopPlayerData[player]
+			data.mythicUses = (data.mythicUses or 0) + productDetails.amount
+
+			-- Save to DataStore
+			pcall(function()
+				local mythicDataStore = DataStoreService:GetDataStore("PlayerMythicData_v1")
+				mythicDataStore:SetAsync(player.UserId, {
+					uses = data.mythicUses,
+					activeUltimate = data.activeMythicUltimate
+				})
+			end)
+
+			grantSuccess = true
+			print("[ROBUX SHOP] Granted", productDetails.amount, "Mythic Uses to", player.Name)
+		end
+
+	elseif productDetails.type == "vippass" then
+		-- Grant VIP Pass
+		if _G.GrantVIPPass then
+			_G.GrantVIPPass(player)
+			grantSuccess = true
+			print("[ROBUX SHOP] Granted VIP Pass to", player.Name)
+		end
+
+	elseif productDetails.type == "ultimate" then
+		-- Grant Ultimate
+		if _G.ShopPlayerData and _G.ShopPlayerData[player] then
+			local data = _G.ShopPlayerData[player]
+			data.ownedUltimates[productDetails.item] = true
+
+			-- Save to DataStore
+			pcall(function()
+				local ultimateDataStore = DataStoreService:GetDataStore("PlayerUltimatesFixed")
+				ultimateDataStore:SetAsync(player.UserId, {
+					ownedUltimates = data.ownedUltimates,
+					selectedUltimates = data.selectedUltimates,
+					ownedMythicUltimates = data.ownedMythicUltimates
+				})
+			end)
+
+			grantSuccess = true
+			print("[ROBUX SHOP] Granted ultimate", productDetails.item, "to", player.Name)
+		end
+
+	elseif productDetails.type == "skin" then
+		-- Grant Skin
+		if _G.ShopPlayerData and _G.ShopPlayerData[player] then
+			local data = _G.ShopPlayerData[player]
+			data.ownedSkins[productDetails.item] = true
+
+			-- Save to DataStore
+			pcall(function()
+				local skinDataStore = DataStoreService:GetDataStore("PlayerSkinsFixed")
+				local activePlayerSkins = _G.GetActivePlayerSkins and _G.GetActivePlayerSkins() or {}
+				skinDataStore:SetAsync(player.UserId, {
+					ownedSkins = data.ownedSkins,
+					selectedSkins = data.selectedSkins,
+					lastEquippedSkin = data.lastEquippedSkin or activePlayerSkins[player],
+					actualEquippedSkin = activePlayerSkins[player] or data.lastEquippedSkin
+				})
+			end)
+
+			grantSuccess = true
+			print("[ROBUX SHOP] Granted skin", productDetails.item, "to", player.Name)
+		end
+	end
+
+	-- Clear pending purchase
+	player:SetAttribute("PendingRobuxPurchase", nil)
+
+	if grantSuccess then
+		-- Mark as processed
+		pcall(function()
+			robuxPurchaseStore:SetAsync(purchaseId, true)
+		end)
+
+		return Enum.ProductPurchaseDecision.PurchaseGranted
+	else
+		return Enum.ProductPurchaseDecision.NotProcessedYet
+	end
+end
+
+-- Set the callback
+MarketplaceService.ProcessReceipt = processReceipt
+
+-- ===== REMOTE HANDLERS =====
+
+-- Handle Robux purchase requests
+robuxPurchase.OnServerInvoke = function(player, purchaseType, itemData)
+	print("[ROBUX SHOP] Purchase request from", player.Name, "Type:", purchaseType, "Data:", itemData)
+
+	local productId = nil
+
+	if purchaseType == "panzaro" then
+		-- Panzaro package
+		local amount = tonumber(itemData)
+		if amount == 100 then
+			productId = PRODUCT_IDS.PANZARO_100
+		elseif amount == 500 then
+			productId = PRODUCT_IDS.PANZARO_500
+		elseif amount == 1000 then
+			productId = PRODUCT_IDS.PANZARO_1000
+		elseif amount == 5000 then
+			productId = PRODUCT_IDS.PANZARO_5000
+		elseif amount == 10000 then
+			productId = PRODUCT_IDS.PANZARO_10000
+		end
+
+	elseif purchaseType == "mythicuses" then
+		-- Mythic Uses
+		local amount = tonumber(itemData)
+		if amount == 5 then
+			productId = PRODUCT_IDS.MYTHIC_5
+		elseif amount == 10 then
+			productId = PRODUCT_IDS.MYTHIC_10
+		elseif amount == 25 then
+			productId = PRODUCT_IDS.MYTHIC_25
+		end
+
+	elseif purchaseType == "vippass" then
+		-- VIP Pass
+		productId = PRODUCT_IDS.VIP_PASS
+
+	elseif purchaseType == "ultimate" or purchaseType == "skin" then
+		-- Direct item purchase - use a generic product ID
+		-- You'll need to create one generic product for each price tier
+		local robuxPrice = getItemRobuxPrice(purchaseType, itemData)
+
+		-- Store pending purchase info
+		player:SetAttribute("PendingRobuxPurchase", purchaseType .. ":" .. itemData)
+
+		-- Use appropriate product ID based on price
+		-- ECHTE PRODUCT IDs BASIEREND AUF PREIS
+		if robuxPrice == 29 then
+			productId = 3372707440 -- 29 Robux product
+		elseif robuxPrice == 49 then
+			productId = 3372707586 -- 49 Robux product
+		elseif robuxPrice == 59 then
+			productId = 3372707741 -- 59 Robux product
+		elseif robuxPrice == 99 then
+			productId = 3372707895 -- 99 Robux product
+		elseif robuxPrice == 119 then
+			productId = 3372708049 -- 119 Robux product
+		elseif robuxPrice == 199 then
+			productId = 3372708166 -- 199 Robux product
+		elseif robuxPrice == 249 then
+			productId = 3372708278 -- 249 Robux product
+		elseif robuxPrice == 399 then
+			productId = 3372708385 -- 399 Robux product
+		elseif robuxPrice == 499 then
+			productId = 3372708502 -- 499 Robux product (auch für VIP)
+		elseif robuxPrice == 799 then
+			productId = 3372708629 -- 799 Robux product
+		end
+	end
+
+	if productId then
+		-- Prompt purchase
+		local success, error = pcall(function()
+			MarketplaceService:PromptProductPurchase(player, productId)
+		end)
+
+		if success then
+			return true, "Purchase prompt shown"
+		else
+			warn("[ROBUX SHOP] Failed to prompt purchase:", error)
+			return false, "Failed to show purchase"
+		end
+	else
+		return false, "Invalid purchase type"
+	end
+end
+
+-- Get Robux prices for items
+getRobuxPrices.OnServerInvoke = function(player)
+	local prices = {}
+
+	-- Get all ultimate prices
+	for epoch, ultimates in pairs(UltimateData.Ultimates) do
+		for _, ultimate in ipairs(ultimates) do
+			prices["ultimate_" .. ultimate.name] = getItemRobuxPrice("ultimate", ultimate.name)
+		end
+	end
+
+	-- Get all skin prices
+	for _, skin in ipairs(SoldierSkinData.Skins) do
+		prices["skin_" .. skin.name] = getItemRobuxPrice("skin", skin.name)
+	end
+
+	-- Add fixed prices
+	prices.vippass = ROBUX_PRICES.VIP_PASS
+	prices.panzaro_packages = {
+		{amount = 100, robux = 25},
+		{amount = 500, robux = 99},
+		{amount = 1000, robux = 179},
+		{amount = 5000, robux = 799},
+		{amount = 10000, robux = 1499}
+	}
+	prices.mythic_packages = {
+		{amount = 5, robux = 99},
+		{amount = 10, robux = 179},
+		{amount = 25, robux = 399}
+	}
+
+	return prices
+end
+
+print("[ROBUX SHOP SERVER] Loaded successfully!")
+print("Remember to set up Developer Products in your game settings!")

@@ -1,0 +1,250 @@
+-- LoadingScreenClient.lua
+-- Platzierung: StarterPlayer/StarterPlayerScripts/LoadingScreenClient (LocalScript)
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
+
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+
+print("[LOADING SCREEN CLIENT] Starting...")
+
+-- Wait for remotes
+local remotes = ReplicatedStorage:WaitForChild("LobbyRemotes", 10)
+if not remotes then
+	warn("[LOADING SCREEN] LobbyRemotes not found!")
+	-- Create it ourselves
+	remotes = Instance.new("Folder")
+	remotes.Name = "LobbyRemotes"
+	remotes.Parent = ReplicatedStorage
+end
+
+-- Try to find loading remote
+local loadingRemote = remotes:FindFirstChild("ShowLoadingScreen")
+if not loadingRemote then
+	print("[LOADING SCREEN] Waiting for ShowLoadingScreen remote...")
+	loadingRemote = remotes:WaitForChild("ShowLoadingScreen", 5)
+end
+
+if not loadingRemote then
+	warn("[LOADING SCREEN] ShowLoadingScreen remote not found after waiting!")
+end
+
+-- Function to create loading screen
+local function showLoadingScreen(imageId, duration)
+	-- Remove any existing loading screen
+	if playerGui:FindFirstChild("VIPLoadingScreen") then
+		playerGui.VIPLoadingScreen:Destroy()
+	end
+
+	-- Create ScreenGui
+	local screenGui = Instance.new("ScreenGui")
+	screenGui.Name = "VIPLoadingScreen"
+	screenGui.ResetOnSpawn = false
+	screenGui.DisplayOrder = 100 -- High priority
+	screenGui.IgnoreGuiInset = true -- Full screen
+	screenGui.Parent = playerGui
+
+	-- Loading Image (VOLLBILD)
+	local loadingImage = Instance.new("ImageLabel")
+	loadingImage.Size = UDim2.new(1, 0, 1, 0) -- VOLLBILD
+	loadingImage.Position = UDim2.new(0.5, 0, 0.5, 0)
+	loadingImage.AnchorPoint = Vector2.new(0.5, 0.5)
+	loadingImage.BackgroundColor3 = Color3.new(0, 0, 0) -- Schwarzer Hintergrund als Fallback
+	loadingImage.BackgroundTransparency = 0
+	loadingImage.Image = imageId or "rbxassetid://135967191928990"
+	loadingImage.ScaleType = Enum.ScaleType.Crop -- Oder Enum.ScaleType.Stretch für volle Dehnung
+	loadingImage.BorderSizePixel = 0
+	loadingImage.Parent = screenGui
+
+	-- Dunkler Overlay für bessere Textlesbarkeit
+	local overlay = Instance.new("Frame")
+	overlay.Size = UDim2.new(1, 0, 1, 0)
+	overlay.Position = UDim2.new(0, 0, 0, 0)
+	overlay.BackgroundColor3 = Color3.new(0, 0, 0)
+	overlay.BackgroundTransparency = 0.3 -- Semi-transparent
+	overlay.BorderSizePixel = 0
+	overlay.Parent = screenGui
+
+	-- Loading Text Container (für bessere Positionierung)
+	local textContainer = Instance.new("Frame")
+	textContainer.Size = UDim2.new(1, 0, 0.5, 0)
+	textContainer.Position = UDim2.new(0, 0, 0.5, 0)
+	textContainer.BackgroundTransparency = 1
+	textContainer.Parent = screenGui
+
+	-- Loading Text
+	local loadingText = Instance.new("TextLabel")
+	loadingText.Size = UDim2.new(0.8, 0, 0, 80) -- Größerer Text
+	loadingText.Position = UDim2.new(0.5, 0, 0.3, 0)
+	loadingText.AnchorPoint = Vector2.new(0.5, 0)
+	loadingText.BackgroundTransparency = 1
+	loadingText.Text = "LOADING..."
+	loadingText.TextColor3 = Color3.new(1, 1, 1)
+	loadingText.TextScaled = true
+	loadingText.Font = Enum.Font.SourceSansBold
+	loadingText.Parent = textContainer
+
+	-- Text Stroke für bessere Lesbarkeit
+	local textStroke = Instance.new("UIStroke")
+	textStroke.Color = Color3.new(0, 0, 0)
+	textStroke.Thickness = 3
+	textStroke.Parent = loadingText
+
+	-- Pulse animation for loading text
+	local pulseLoop = TweenService:Create(
+		loadingText,
+		TweenInfo.new(0.5, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true),
+		{TextTransparency = 0.3}
+	)
+	pulseLoop:Play()
+
+	-- VIP Check Status Text
+	local statusText = Instance.new("TextLabel")
+	statusText.Size = UDim2.new(0.8, 0, 0, 40)
+	statusText.Position = UDim2.new(0.5, 0, 0.5, 0)
+	statusText.AnchorPoint = Vector2.new(0.5, 0)
+	statusText.BackgroundTransparency = 1
+	statusText.Text = "Checking VIP Status..."
+	statusText.TextColor3 = Color3.fromRGB(255, 215, 0)
+	statusText.TextScaled = true
+	statusText.Font = Enum.Font.Gotham
+	statusText.Parent = textContainer
+
+	-- Status Text Stroke
+	local statusStroke = Instance.new("UIStroke")
+	statusStroke.Color = Color3.new(0, 0, 0)
+	statusStroke.Thickness = 2
+	statusStroke.Parent = statusText
+
+	-- Progress Bar Container
+	local progressContainer = Instance.new("Frame")
+	progressContainer.Size = UDim2.new(0.5, 0, 0, 15) -- Größere Progress Bar
+	progressContainer.Position = UDim2.new(0.5, 0, 0.65, 0)
+	progressContainer.AnchorPoint = Vector2.new(0.5, 0)
+	progressContainer.BackgroundTransparency = 1
+	progressContainer.Parent = textContainer
+
+	-- Progress Bar Background
+	local progressFrame = Instance.new("Frame")
+	progressFrame.Size = UDim2.new(1, 0, 1, 0)
+	progressFrame.Position = UDim2.new(0, 0, 0, 0)
+	progressFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+	progressFrame.BackgroundTransparency = 0.3
+	progressFrame.BorderSizePixel = 0
+	progressFrame.Parent = progressContainer
+
+	local progressCorner = Instance.new("UICorner")
+	progressCorner.CornerRadius = UDim.new(0, 8)
+	progressCorner.Parent = progressFrame
+
+	-- Progress Bar Border
+	local progressBorder = Instance.new("UIStroke")
+	progressBorder.Color = Color3.fromRGB(255, 215, 0)
+	progressBorder.Thickness = 2
+	progressBorder.Transparency = 0.5
+	progressBorder.Parent = progressFrame
+
+	-- Progress Bar Fill
+	local progressBar = Instance.new("Frame")
+	progressBar.Size = UDim2.new(0, 0, 1, 0)
+	progressBar.Position = UDim2.new(0, 0, 0, 0)
+	progressBar.BackgroundColor3 = Color3.fromRGB(255, 215, 0)
+	progressBar.BorderSizePixel = 0
+	progressBar.Parent = progressFrame
+
+	local progressBarCorner = Instance.new("UICorner")
+	progressBarCorner.CornerRadius = UDim.new(0, 8)
+	progressBarCorner.Parent = progressBar
+
+	-- Progress Bar Gradient
+	local progressGradient = Instance.new("UIGradient")
+	progressGradient.Color = ColorSequence.new{
+		ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 255, 100)),
+		ColorSequenceKeypoint.new(1, Color3.fromRGB(255, 180, 0))
+	}
+	progressGradient.Rotation = 90
+	progressGradient.Parent = progressBar
+
+	-- Animate progress bar
+	TweenService:Create(
+		progressBar,
+		TweenInfo.new(duration or 3, Enum.EasingStyle.Linear),
+		{Size = UDim2.new(1, 0, 1, 0)}
+	):Play()
+
+	-- Update status messages
+	task.spawn(function()
+		task.wait(1)
+		statusText.Text = "Verifying Rank..."
+		task.wait(1)
+		statusText.Text = "Preparing Spawn..."
+		task.wait(0.8)
+		statusText.Text = "Almost Ready..."
+	end)
+
+	-- Fade out and destroy after duration
+	task.wait(duration or 3)
+
+	-- Stop animations
+	pulseLoop:Cancel()
+
+	-- Fade out animation
+	local fadeOut = TweenService:Create(
+		overlay,
+		TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+		{BackgroundTransparency = 1}
+	)
+
+	local imageFadeOut = TweenService:Create(
+		loadingImage,
+		TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+		{ImageTransparency = 1}
+	)
+
+	local textFadeOut = TweenService:Create(
+		textContainer,
+		TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+		{BackgroundTransparency = 1}
+	)
+
+	fadeOut:Play()
+	imageFadeOut:Play()
+	textFadeOut:Play()
+
+	-- Destroy after fade
+	fadeOut.Completed:Connect(function()
+		screenGui:Destroy()
+	end)
+
+	print("[LOADING SCREEN] Displayed for", duration, "seconds")
+end
+
+-- Listen for loading screen requests
+if loadingRemote then
+	loadingRemote.OnClientEvent:Connect(function(imageId, duration)
+		print("[LOADING SCREEN] Received request from server")
+		showLoadingScreen(imageId, duration)
+	end)
+	print("[LOADING SCREEN CLIENT] Connected to remote event")
+else
+	warn("[LOADING SCREEN CLIENT] Could not connect to remote event!")
+end
+
+-- BACKUP: Auto-show loading screen on character spawn
+player.CharacterAdded:Connect(function(character)
+	print("[LOADING SCREEN] Character spawned, showing loading screen as backup")
+	-- Show loading screen immediately
+	showLoadingScreen("rbxassetid://135967191928990", 3)
+end)
+
+print("[LOADING SCREEN CLIENT] Initialized successfully!")
+
+-- TEST COMMAND
+player.Chatted:Connect(function(msg)
+	if msg:lower() == "/testloading" then
+		print("[LOADING SCREEN] Test command - showing loading screen")
+		showLoadingScreen("rbxassetid://135967191928990", 3)
+	end
+end)

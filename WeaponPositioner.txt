@@ -1,0 +1,558 @@
+-- WeaponPositioner.lua
+-- Platzierung: StarterPlayer/StarterPlayerScripts/WeaponPositioner (LocalScript)
+-- WICHTIG: NUR FUER ENTWICKLUNG/TESTING - ENTFERNEN VOR RELEASE!
+
+-- Services
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+
+-- Player
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+
+-- State
+local IsActive = false
+local CurrentWeapon = nil
+
+-- Position/Rotation/Scale Werte
+local PosX, PosY, PosZ = 0, -1, 0
+local RotX, RotY, RotZ = -90, 0, 0
+local Scale = 1.0
+
+-- Schrittgroessen
+local POS_STEP = 0.05
+local ROT_STEP = 5
+local SCALE_STEP = 0.1
+
+-- UI Referenzen
+local UI = {}
+
+-- ═══════════════════════════════════════════════════════════════
+-- HILFSFUNKTIONEN
+-- ═══════════════════════════════════════════════════════════════
+
+local function GetCurrentCFrame()
+	return CFrame.new(PosX, PosY, PosZ) * CFrame.Angles(
+		math.rad(RotX),
+		math.rad(RotY),
+		math.rad(RotZ)
+	)
+end
+
+local function ApplyToWeapon()
+	if not CurrentWeapon then return end
+
+	local weld = CurrentWeapon:FindFirstChildWhichIsA("Weld") or CurrentWeapon:FindFirstChildWhichIsA("Motor6D")
+	if weld then
+		weld.C0 = GetCurrentCFrame()
+	end
+end
+
+local function UpdateDisplay()
+	if UI.PosXBox then UI.PosXBox.Text = string.format("%.3f", PosX) end
+	if UI.PosYBox then UI.PosYBox.Text = string.format("%.3f", PosY) end
+	if UI.PosZBox then UI.PosZBox.Text = string.format("%.3f", PosZ) end
+	if UI.RotXBox then UI.RotXBox.Text = string.format("%.1f", RotX) end
+	if UI.RotYBox then UI.RotYBox.Text = string.format("%.1f", RotY) end
+	if UI.RotZBox then UI.RotZBox.Text = string.format("%.1f", RotZ) end
+	if UI.ScaleBox then UI.ScaleBox.Text = string.format("%.2f", Scale) end
+end
+
+local function ApplyScale()
+	if not CurrentWeapon then return end
+
+	-- Speichere Original-Scale beim ersten Mal
+	if not CurrentWeapon:GetAttribute("OriginalScale") then
+		CurrentWeapon:SetAttribute("OriginalScale", CurrentWeapon:GetScale())
+	end
+
+	local origScale = CurrentWeapon:GetAttribute("OriginalScale") or 1
+
+	-- Nutze Roblox's Model:ScaleTo() - skaliert alles korrekt inkl. Welds
+	local success, err = pcall(function()
+		CurrentWeapon:ScaleTo(origScale * Scale)
+	end)
+
+	if not success then
+		-- Fallback fuer aeltere Models ohne ScaleTo Support
+		warn("[WeaponPositioner] ScaleTo nicht verfuegbar:", err)
+		warn("[WeaponPositioner] Scale wird nur als Wert gespeichert, nicht live angewendet.")
+	end
+end
+
+local function FindCurrentWeapon()
+	local character = player.Character
+	if not character then return nil end
+
+	for _, child in pairs(character:GetChildren()) do
+		if child:GetAttribute("IsWeapon") then
+			return child
+		end
+	end
+	return nil
+end
+
+local function LoadFromWeapon()
+	if not CurrentWeapon then return end
+
+	local weld = CurrentWeapon:FindFirstChildWhichIsA("Weld") or CurrentWeapon:FindFirstChildWhichIsA("Motor6D")
+	if weld then
+		local cf = weld.C0
+		PosX, PosY, PosZ = cf.Position.X, cf.Position.Y, cf.Position.Z
+		local rx, ry, rz = cf:ToEulerAnglesXYZ()
+		RotX, RotY, RotZ = math.deg(rx), math.deg(ry), math.deg(rz)
+		UpdateDisplay()
+	end
+end
+
+local function SavePosition()
+	if not CurrentWeapon then
+		warn("[WeaponPositioner] Keine Waffe!")
+		return
+	end
+
+	local slot = CurrentWeapon:GetAttribute("WeaponSlot") or 0
+
+	print("════════════════════════════════════════════════════════")
+	print("[WEAPON POSITIONER] SAVED - Slot " .. slot)
+	print("")
+	print("-- GameConfig.WeaponOffsets:")
+	print(string.format(
+		'[%d] = CFrame.new(%.3f, %.3f, %.3f) * CFrame.Angles(math.rad(%.1f), math.rad(%.1f), math.rad(%.1f)),',
+		slot, PosX, PosY, PosZ, RotX, RotY, RotZ
+	))
+	print("")
+	print("-- GameConfig.WeaponScales:")
+	print(string.format('[%d] = %.2f,', slot, Scale))
+	print("════════════════════════════════════════════════════════")
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- UI ERSTELLEN
+-- ═══════════════════════════════════════════════════════════════
+
+local function CreateUI()
+	local screenGui = Instance.new("ScreenGui")
+	screenGui.Name = "WeaponPositionerUI"
+	screenGui.ResetOnSpawn = false
+	screenGui.DisplayOrder = 100
+	screenGui.Parent = playerGui
+
+	-- Hauptfenster
+	local main = Instance.new("Frame")
+	main.Name = "Main"
+	main.Size = UDim2.new(0, 280, 0, 440)
+	main.Position = UDim2.new(0, 15, 0.5, -220)
+	main.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
+	main.BorderSizePixel = 0
+	main.Visible = false
+	main.Parent = screenGui
+
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 10)
+	corner.Parent = main
+
+	local stroke = Instance.new("UIStroke")
+	stroke.Color = Color3.fromRGB(100, 150, 255)
+	stroke.Thickness = 2
+	stroke.Parent = main
+
+	-- Titel
+	local title = Instance.new("TextLabel")
+	title.Size = UDim2.new(1, 0, 0, 30)
+	title.BackgroundTransparency = 1
+	title.Text = "WEAPON POSITIONER"
+	title.TextColor3 = Color3.fromRGB(100, 150, 255)
+	title.TextScaled = true
+	title.Font = Enum.Font.GothamBold
+	title.Parent = main
+
+	-- Status
+	local status = Instance.new("TextLabel")
+	status.Name = "Status"
+	status.Size = UDim2.new(1, -20, 0, 20)
+	status.Position = UDim2.new(0, 10, 0, 32)
+	status.BackgroundTransparency = 1
+	status.Text = "Keine Waffe"
+	status.TextColor3 = Color3.fromRGB(255, 200, 100)
+	status.TextScaled = true
+	status.Font = Enum.Font.Gotham
+	status.TextXAlignment = Enum.TextXAlignment.Left
+	status.Parent = main
+	UI.Status = status
+
+	-- Funktion fuer Zeile mit +/- Buttons
+	local function CreateRow(name, yPos, getValue, setValue, step)
+		local label = Instance.new("TextLabel")
+		label.Size = UDim2.new(0, 30, 0, 30)
+		label.Position = UDim2.new(0, 10, 0, yPos)
+		label.BackgroundTransparency = 1
+		label.Text = name
+		label.TextColor3 = Color3.new(1, 1, 1)
+		label.TextScaled = true
+		label.Font = Enum.Font.GothamBold
+		label.Parent = main
+
+		local minusBtn = Instance.new("TextButton")
+		minusBtn.Size = UDim2.new(0, 35, 0, 30)
+		minusBtn.Position = UDim2.new(0, 45, 0, yPos)
+		minusBtn.BackgroundColor3 = Color3.fromRGB(180, 60, 60)
+		minusBtn.Text = "-"
+		minusBtn.TextColor3 = Color3.new(1, 1, 1)
+		minusBtn.TextScaled = true
+		minusBtn.Font = Enum.Font.GothamBold
+		minusBtn.Parent = main
+		Instance.new("UICorner", minusBtn).CornerRadius = UDim.new(0, 6)
+
+		local valueBox = Instance.new("TextBox")
+		valueBox.Size = UDim2.new(0, 80, 0, 30)
+		valueBox.Position = UDim2.new(0, 85, 0, yPos)
+		valueBox.BackgroundColor3 = Color3.fromRGB(50, 50, 60)
+		valueBox.Text = "0"
+		valueBox.TextColor3 = Color3.fromRGB(100, 255, 100)
+		valueBox.TextScaled = true
+		valueBox.Font = Enum.Font.Code
+		valueBox.Parent = main
+		Instance.new("UICorner", valueBox).CornerRadius = UDim.new(0, 6)
+
+		local plusBtn = Instance.new("TextButton")
+		plusBtn.Size = UDim2.new(0, 35, 0, 30)
+		plusBtn.Position = UDim2.new(0, 170, 0, yPos)
+		plusBtn.BackgroundColor3 = Color3.fromRGB(60, 180, 60)
+		plusBtn.Text = "+"
+		plusBtn.TextColor3 = Color3.new(1, 1, 1)
+		plusBtn.TextScaled = true
+		plusBtn.Font = Enum.Font.GothamBold
+		plusBtn.Parent = main
+		Instance.new("UICorner", plusBtn).CornerRadius = UDim.new(0, 6)
+
+		-- Grosser Sprung Buttons
+		local bigMinusBtn = Instance.new("TextButton")
+		bigMinusBtn.Size = UDim2.new(0, 30, 0, 30)
+		bigMinusBtn.Position = UDim2.new(0, 210, 0, yPos)
+		bigMinusBtn.BackgroundColor3 = Color3.fromRGB(120, 40, 40)
+		bigMinusBtn.Text = "--"
+		bigMinusBtn.TextColor3 = Color3.new(1, 1, 1)
+		bigMinusBtn.TextScaled = true
+		bigMinusBtn.Font = Enum.Font.GothamBold
+		bigMinusBtn.Parent = main
+		Instance.new("UICorner", bigMinusBtn).CornerRadius = UDim.new(0, 6)
+
+		local bigPlusBtn = Instance.new("TextButton")
+		bigPlusBtn.Size = UDim2.new(0, 30, 0, 30)
+		bigPlusBtn.Position = UDim2.new(0, 243, 0, yPos)
+		bigPlusBtn.BackgroundColor3 = Color3.fromRGB(40, 120, 40)
+		bigPlusBtn.Text = "++"
+		bigPlusBtn.TextColor3 = Color3.new(1, 1, 1)
+		bigPlusBtn.TextScaled = true
+		bigPlusBtn.Font = Enum.Font.GothamBold
+		bigPlusBtn.Parent = main
+		Instance.new("UICorner", bigPlusBtn).CornerRadius = UDim.new(0, 6)
+
+		-- Events
+		minusBtn.MouseButton1Click:Connect(function()
+			setValue(getValue() - step)
+			UpdateDisplay()
+			ApplyToWeapon()
+		end)
+
+		plusBtn.MouseButton1Click:Connect(function()
+			setValue(getValue() + step)
+			UpdateDisplay()
+			ApplyToWeapon()
+		end)
+
+		bigMinusBtn.MouseButton1Click:Connect(function()
+			setValue(getValue() - step * 5)
+			UpdateDisplay()
+			ApplyToWeapon()
+		end)
+
+		bigPlusBtn.MouseButton1Click:Connect(function()
+			setValue(getValue() + step * 5)
+			UpdateDisplay()
+			ApplyToWeapon()
+		end)
+
+		valueBox.FocusLost:Connect(function()
+			local val = tonumber(valueBox.Text)
+			if val then
+				setValue(val)
+				ApplyToWeapon()
+			end
+			UpdateDisplay()
+		end)
+
+		return valueBox
+	end
+
+	-- Trennlinie Position
+	local posTitle = Instance.new("TextLabel")
+	posTitle.Size = UDim2.new(1, -20, 0, 18)
+	posTitle.Position = UDim2.new(0, 10, 0, 58)
+	posTitle.BackgroundTransparency = 1
+	posTitle.Text = "POSITION"
+	posTitle.TextColor3 = Color3.fromRGB(100, 150, 255)
+	posTitle.TextScaled = true
+	posTitle.Font = Enum.Font.GothamBold
+	posTitle.TextXAlignment = Enum.TextXAlignment.Left
+	posTitle.Parent = main
+
+	-- Position Rows
+	UI.PosXBox = CreateRow("X", 80, function() return PosX end, function(v) PosX = v end, POS_STEP)
+	UI.PosYBox = CreateRow("Y", 115, function() return PosY end, function(v) PosY = v end, POS_STEP)
+	UI.PosZBox = CreateRow("Z", 150, function() return PosZ end, function(v) PosZ = v end, POS_STEP)
+
+	-- Trennlinie Rotation
+	local rotTitle = Instance.new("TextLabel")
+	rotTitle.Size = UDim2.new(1, -20, 0, 18)
+	rotTitle.Position = UDim2.new(0, 10, 0, 188)
+	rotTitle.BackgroundTransparency = 1
+	rotTitle.Text = "ROTATION (Grad)"
+	rotTitle.TextColor3 = Color3.fromRGB(100, 150, 255)
+	rotTitle.TextScaled = true
+	rotTitle.Font = Enum.Font.GothamBold
+	rotTitle.TextXAlignment = Enum.TextXAlignment.Left
+	rotTitle.Parent = main
+
+	-- Rotation Rows
+	UI.RotXBox = CreateRow("RX", 210, function() return RotX end, function(v) RotX = v end, ROT_STEP)
+	UI.RotYBox = CreateRow("RY", 245, function() return RotY end, function(v) RotY = v end, ROT_STEP)
+	UI.RotZBox = CreateRow("RZ", 280, function() return RotZ end, function(v) RotZ = v end, ROT_STEP)
+
+	-- Trennlinie Scale
+	local scaleTitle = Instance.new("TextLabel")
+	scaleTitle.Size = UDim2.new(1, -20, 0, 18)
+	scaleTitle.Position = UDim2.new(0, 10, 0, 318)
+	scaleTitle.BackgroundTransparency = 1
+	scaleTitle.Text = "SCALE"
+	scaleTitle.TextColor3 = Color3.fromRGB(255, 180, 100)
+	scaleTitle.TextScaled = true
+	scaleTitle.Font = Enum.Font.GothamBold
+	scaleTitle.TextXAlignment = Enum.TextXAlignment.Left
+	scaleTitle.Parent = main
+
+	-- Scale Row (mit ApplyScale statt ApplyToWeapon)
+	local function CreateScaleRow(name, yPos, getValue, setValue, step)
+		local label = Instance.new("TextLabel")
+		label.Size = UDim2.new(0, 30, 0, 30)
+		label.Position = UDim2.new(0, 10, 0, yPos)
+		label.BackgroundTransparency = 1
+		label.Text = name
+		label.TextColor3 = Color3.new(1, 1, 1)
+		label.TextScaled = true
+		label.Font = Enum.Font.GothamBold
+		label.Parent = main
+
+		local minusBtn = Instance.new("TextButton")
+		minusBtn.Size = UDim2.new(0, 35, 0, 30)
+		minusBtn.Position = UDim2.new(0, 45, 0, yPos)
+		minusBtn.BackgroundColor3 = Color3.fromRGB(180, 60, 60)
+		minusBtn.Text = "-"
+		minusBtn.TextColor3 = Color3.new(1, 1, 1)
+		minusBtn.TextScaled = true
+		minusBtn.Font = Enum.Font.GothamBold
+		minusBtn.Parent = main
+		Instance.new("UICorner", minusBtn).CornerRadius = UDim.new(0, 6)
+
+		local valueBox = Instance.new("TextBox")
+		valueBox.Size = UDim2.new(0, 80, 0, 30)
+		valueBox.Position = UDim2.new(0, 85, 0, yPos)
+		valueBox.BackgroundColor3 = Color3.fromRGB(50, 50, 60)
+		valueBox.Text = "1.0"
+		valueBox.TextColor3 = Color3.fromRGB(255, 180, 100)
+		valueBox.TextScaled = true
+		valueBox.Font = Enum.Font.Code
+		valueBox.Parent = main
+		Instance.new("UICorner", valueBox).CornerRadius = UDim.new(0, 6)
+
+		local plusBtn = Instance.new("TextButton")
+		plusBtn.Size = UDim2.new(0, 35, 0, 30)
+		plusBtn.Position = UDim2.new(0, 170, 0, yPos)
+		plusBtn.BackgroundColor3 = Color3.fromRGB(60, 180, 60)
+		plusBtn.Text = "+"
+		plusBtn.TextColor3 = Color3.new(1, 1, 1)
+		plusBtn.TextScaled = true
+		plusBtn.Font = Enum.Font.GothamBold
+		plusBtn.Parent = main
+		Instance.new("UICorner", plusBtn).CornerRadius = UDim.new(0, 6)
+
+		local bigMinusBtn = Instance.new("TextButton")
+		bigMinusBtn.Size = UDim2.new(0, 30, 0, 30)
+		bigMinusBtn.Position = UDim2.new(0, 210, 0, yPos)
+		bigMinusBtn.BackgroundColor3 = Color3.fromRGB(120, 40, 40)
+		bigMinusBtn.Text = "--"
+		bigMinusBtn.TextColor3 = Color3.new(1, 1, 1)
+		bigMinusBtn.TextScaled = true
+		bigMinusBtn.Font = Enum.Font.GothamBold
+		bigMinusBtn.Parent = main
+		Instance.new("UICorner", bigMinusBtn).CornerRadius = UDim.new(0, 6)
+
+		local bigPlusBtn = Instance.new("TextButton")
+		bigPlusBtn.Size = UDim2.new(0, 30, 0, 30)
+		bigPlusBtn.Position = UDim2.new(0, 243, 0, yPos)
+		bigPlusBtn.BackgroundColor3 = Color3.fromRGB(40, 120, 40)
+		bigPlusBtn.Text = "++"
+		bigPlusBtn.TextColor3 = Color3.new(1, 1, 1)
+		bigPlusBtn.TextScaled = true
+		bigPlusBtn.Font = Enum.Font.GothamBold
+		bigPlusBtn.Parent = main
+		Instance.new("UICorner", bigPlusBtn).CornerRadius = UDim.new(0, 6)
+
+		minusBtn.MouseButton1Click:Connect(function()
+			setValue(math.max(0.1, getValue() - step))
+			UpdateDisplay()
+			ApplyScale()
+		end)
+
+		plusBtn.MouseButton1Click:Connect(function()
+			setValue(getValue() + step)
+			UpdateDisplay()
+			ApplyScale()
+		end)
+
+		bigMinusBtn.MouseButton1Click:Connect(function()
+			setValue(math.max(0.1, getValue() - step * 5))
+			UpdateDisplay()
+			ApplyScale()
+		end)
+
+		bigPlusBtn.MouseButton1Click:Connect(function()
+			setValue(getValue() + step * 5)
+			UpdateDisplay()
+			ApplyScale()
+		end)
+
+		valueBox.FocusLost:Connect(function()
+			local val = tonumber(valueBox.Text)
+			if val and val > 0 then
+				setValue(val)
+				ApplyScale()
+			end
+			UpdateDisplay()
+		end)
+
+		return valueBox
+	end
+
+	UI.ScaleBox = CreateScaleRow("S", 340, function() return Scale end, function(v) Scale = v end, SCALE_STEP)
+
+	-- Buttons unten
+	local resetBtn = Instance.new("TextButton")
+	resetBtn.Size = UDim2.new(0, 80, 0, 35)
+	resetBtn.Position = UDim2.new(0, 10, 0, 385)
+	resetBtn.BackgroundColor3 = Color3.fromRGB(200, 150, 50)
+	resetBtn.Text = "RESET"
+	resetBtn.TextColor3 = Color3.new(1, 1, 1)
+	resetBtn.TextScaled = true
+	resetBtn.Font = Enum.Font.GothamBold
+	resetBtn.Parent = main
+	Instance.new("UICorner", resetBtn).CornerRadius = UDim.new(0, 8)
+
+	resetBtn.MouseButton1Click:Connect(function()
+		PosX, PosY, PosZ = 0, -1, 0
+		RotX, RotY, RotZ = -90, 0, 0
+		Scale = 1.0
+		UpdateDisplay()
+		ApplyToWeapon()
+		ApplyScale()
+	end)
+
+	local loadBtn = Instance.new("TextButton")
+	loadBtn.Size = UDim2.new(0, 80, 0, 35)
+	loadBtn.Position = UDim2.new(0, 98, 0, 385)
+	loadBtn.BackgroundColor3 = Color3.fromRGB(80, 80, 180)
+	loadBtn.Text = "LOAD"
+	loadBtn.TextColor3 = Color3.new(1, 1, 1)
+	loadBtn.TextScaled = true
+	loadBtn.Font = Enum.Font.GothamBold
+	loadBtn.Parent = main
+	Instance.new("UICorner", loadBtn).CornerRadius = UDim.new(0, 8)
+
+	loadBtn.MouseButton1Click:Connect(function()
+		LoadFromWeapon()
+	end)
+
+	local saveBtn = Instance.new("TextButton")
+	saveBtn.Size = UDim2.new(0, 80, 0, 35)
+	saveBtn.Position = UDim2.new(0, 186, 0, 385)
+	saveBtn.BackgroundColor3 = Color3.fromRGB(60, 180, 80)
+	saveBtn.Text = "SAVE"
+	saveBtn.TextColor3 = Color3.new(1, 1, 1)
+	saveBtn.TextScaled = true
+	saveBtn.Font = Enum.Font.GothamBold
+	saveBtn.Parent = main
+	Instance.new("UICorner", saveBtn).CornerRadius = UDim.new(0, 8)
+
+	saveBtn.MouseButton1Click:Connect(function()
+		SavePosition()
+	end)
+
+	-- Toggle Button (immer sichtbar)
+	local toggleBtn = Instance.new("TextButton")
+	toggleBtn.Name = "Toggle"
+	toggleBtn.Size = UDim2.new(0, 40, 0, 40)
+	toggleBtn.Position = UDim2.new(0, 15, 0, 75)
+	toggleBtn.BackgroundColor3 = Color3.fromRGB(100, 150, 255)
+	toggleBtn.Text = "WP"
+	toggleBtn.TextColor3 = Color3.new(1, 1, 1)
+	toggleBtn.TextScaled = true
+	toggleBtn.Font = Enum.Font.GothamBold
+	toggleBtn.Parent = screenGui
+	Instance.new("UICorner", toggleBtn).CornerRadius = UDim.new(0, 8)
+
+	toggleBtn.MouseButton1Click:Connect(function()
+		IsActive = not IsActive
+		main.Visible = IsActive
+
+		if IsActive then
+			CurrentWeapon = FindCurrentWeapon()
+			if CurrentWeapon then
+				local slot = CurrentWeapon:GetAttribute("WeaponSlot") or "?"
+				status.Text = "Waffe Slot: " .. tostring(slot)
+				status.TextColor3 = Color3.fromRGB(100, 255, 100)
+				LoadFromWeapon()
+			else
+				status.Text = "KEINE WAFFE!"
+				status.TextColor3 = Color3.fromRGB(255, 100, 100)
+			end
+			toggleBtn.BackgroundColor3 = Color3.fromRGB(100, 255, 100)
+		else
+			toggleBtn.BackgroundColor3 = Color3.fromRGB(100, 150, 255)
+		end
+	end)
+
+	UI.Main = main
+	UI.ScreenGui = screenGui
+
+	return screenGui
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- INITIALISIERUNG
+-- ═══════════════════════════════════════════════════════════════
+
+CreateUI()
+UpdateDisplay()
+
+-- Auto-Update wenn Waffe wechselt
+RunService.Heartbeat:Connect(function()
+	if IsActive then
+		local weapon = FindCurrentWeapon()
+		if weapon ~= CurrentWeapon then
+			CurrentWeapon = weapon
+			if CurrentWeapon then
+				local slot = CurrentWeapon:GetAttribute("WeaponSlot") or "?"
+				UI.Status.Text = "Waffe Slot: " .. tostring(slot)
+				UI.Status.TextColor3 = Color3.fromRGB(100, 255, 100)
+				LoadFromWeapon()
+			else
+				UI.Status.Text = "KEINE WAFFE!"
+				UI.Status.TextColor3 = Color3.fromRGB(255, 100, 100)
+			end
+		end
+	end
+end)
+
+print("[WeaponPositioner] Ready! Klicke auf WP-Button links.")

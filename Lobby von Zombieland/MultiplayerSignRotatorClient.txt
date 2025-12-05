@@ -1,0 +1,90 @@
+-- MultiplayerSignRotatorClient.lua
+-- Platzierung: StarterPlayer/StarterPlayerScripts/MultiplayerSignRotatorClient (LocalScript)
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+
+local player = Players.LocalPlayer
+
+-- Warte auf Character
+local character = player.Character or player.CharacterAdded:Wait()
+
+-- Warte auf die Modelle
+local allesFolder = workspace:WaitForChild("Alles")
+local multiplayerModel = allesFolder:WaitForChild("Multiplayer")
+local singleplayerModel = allesFolder:WaitForChild("Singleplayer", 5)
+
+print("[SIGN ROTATOR CLIENT] Starting client-side rotation...")
+
+-- Funktion um AlwaysOnTop zu aktivieren
+local function makeAlwaysOnTop(model)
+	for _, part in ipairs(model:GetDescendants()) do
+		if part:IsA("SurfaceGui") then
+			part.AlwaysOnTop = true
+			part.LightInfluence = 0
+			part.Brightness = 2 -- Macht es heller
+		elseif part:IsA("BillboardGui") then
+			part.AlwaysOnTop = true
+			part.LightInfluence = 0
+			part.Brightness = 2
+		elseif part:IsA("TextLabel") then
+			-- Stelle sicher dass Text gut sichtbar ist
+			part.TextStrokeTransparency = 0
+			part.TextStrokeColor3 = Color3.new(0, 0, 0)
+		end
+	end
+end
+
+-- Setup
+makeAlwaysOnTop(multiplayerModel)
+if singleplayerModel then
+	makeAlwaysOnTop(singleplayerModel)
+end
+
+-- Rotation Loop
+RunService.RenderStepped:Connect(function()
+	if not character or not character:FindFirstChild("HumanoidRootPart") then
+		character = player.Character
+		return
+	end
+
+	local playerPos = character.HumanoidRootPart.Position
+
+	-- Rotate Multiplayer Model
+	if multiplayerModel and multiplayerModel.PrimaryPart then
+		local modelPos = multiplayerModel.PrimaryPart.Position
+		local direction = (playerPos - modelPos) * Vector3.new(1, 0, 1) -- Nur X und Z
+
+		if direction.Magnitude > 0 then
+			multiplayerModel:SetPrimaryPartCFrame(
+				CFrame.lookAt(modelPos, modelPos + direction.Unit)
+			)
+		end
+	end
+
+	-- Rotate Singleplayer Model
+	if singleplayerModel and singleplayerModel.PrimaryPart then
+		local modelPos = singleplayerModel.PrimaryPart.Position
+		local direction = (playerPos - modelPos) * Vector3.new(1, 0, 1)
+
+		if direction.Magnitude > 0 then
+			singleplayerModel:SetPrimaryPartCFrame(
+				CFrame.lookAt(modelPos, modelPos + direction.Unit)
+			)
+		end
+	end
+end)
+
+-- Re-setup wenn Character respawnt
+player.CharacterAdded:Connect(function(newCharacter)
+	character = newCharacter
+	character:WaitForChild("HumanoidRootPart")
+
+	-- Re-apply AlwaysOnTop nach Respawn
+	makeAlwaysOnTop(multiplayerModel)
+	if singleplayerModel then
+		makeAlwaysOnTop(singleplayerModel)
+	end
+end)
+
+print("[SIGN ROTATOR CLIENT] Active - Signs rotating to local player")

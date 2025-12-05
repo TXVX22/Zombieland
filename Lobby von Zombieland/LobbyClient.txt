@@ -1,0 +1,939 @@
+-- LobbyClient.lua (BEAUTIFUL UI UPDATE)
+-- Platzierung: StarterPlayer/StarterPlayerScripts/LobbyClient (LocalScript)
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+
+print("[LOBBY CLIENT] Starting with beautiful UI...")
+
+-- Detect if on mobile
+local isMobile = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
+
+-- Wait for RemoteEvents
+local remotes = ReplicatedStorage:WaitForChild("LobbyRemotes", 30)
+
+if not remotes then
+	warn("[LOBBY CLIENT] LobbyRemotes folder not found after 30 seconds!")
+	return
+end
+
+-- Get RemoteEvents
+local showMultiplayerPrompt = remotes:WaitForChild("ShowMultiplayerPrompt", 10)
+local showSingleplayerPrompt = remotes:WaitForChild("ShowSingleplayerPrompt", 10)
+local playerResponse = remotes:WaitForChild("PlayerResponse", 10)
+local cancelMatchmaking = remotes:WaitForChild("CancelMatchmaking", 10)
+
+-- Track if prompts are already shown
+local activePrompts = {}
+local isInCountdown = false
+local isInMatchmaking = false
+
+-- NEU: Funktion zum Schließen aller aktiven Prompts
+local function closeAllPrompts()
+	for promptType, prompt in pairs(activePrompts) do
+		if prompt and prompt.Parent then
+			prompt:Destroy()
+		end
+		activePrompts[promptType] = nil
+	end
+end
+
+-- ===== SCHÖNE UI HELPER FUNKTIONEN =====
+
+-- Erstellt einen stylischen Button mit Gradient und Effekten
+local function createStylishButton(parent, text, color, secondaryColor, layoutOrder)
+	local button = Instance.new("TextButton")
+	button.Name = text .. "Button"
+	button.Size = UDim2.new(1, 0, 0, 70)
+	button.BackgroundColor3 = color
+	button.Text = ""
+	button.AutoButtonColor = false
+	button.LayoutOrder = layoutOrder or 0
+	button.Parent = parent
+
+	-- Abgerundete Ecken
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 14)
+	corner.Parent = button
+
+	-- Gradient
+	local gradient = Instance.new("UIGradient")
+	gradient.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, Color3.new(1, 1, 1)),
+		ColorSequenceKeypoint.new(0.5, Color3.new(0.95, 0.95, 0.95)),
+		ColorSequenceKeypoint.new(1, Color3.new(0.8, 0.8, 0.8))
+	})
+	gradient.Rotation = 90
+	gradient.Parent = button
+
+	-- Stroke
+	local stroke = Instance.new("UIStroke")
+	stroke.Color = secondaryColor or color
+	stroke.Thickness = 2
+	stroke.Transparency = 0.3
+	stroke.Parent = button
+
+	-- Text Label (für bessere Kontrolle)
+	local textLabel = Instance.new("TextLabel")
+	textLabel.Name = "Label"
+	textLabel.Size = UDim2.new(1, -20, 1, 0)
+	textLabel.Position = UDim2.new(0, 10, 0, 0)
+	textLabel.BackgroundTransparency = 1
+	textLabel.Text = text
+	textLabel.TextColor3 = Color3.new(1, 1, 1)
+	textLabel.TextScaled = true
+	textLabel.Font = Enum.Font.GothamBold
+	textLabel.TextStrokeTransparency = 0.5
+	textLabel.TextStrokeColor3 = secondaryColor or Color3.new(0, 0, 0)
+	textLabel.Parent = button
+
+	-- Shine Effect (oben)
+	local shine = Instance.new("Frame")
+	shine.Name = "Shine"
+	shine.Size = UDim2.new(1, -4, 0.4, 0)
+	shine.Position = UDim2.new(0, 2, 0, 2)
+	shine.BackgroundColor3 = Color3.new(1, 1, 1)
+	shine.BackgroundTransparency = 0.85
+	shine.BorderSizePixel = 0
+	shine.Parent = button
+
+	local shineCorner = Instance.new("UICorner")
+	shineCorner.CornerRadius = UDim.new(0, 12)
+	shineCorner.Parent = shine
+
+	-- Hover & Click Effekte
+	local originalColor = color
+	local hoverColor = Color3.new(
+		math.min(color.R * 1.2, 1),
+		math.min(color.G * 1.2, 1),
+		math.min(color.B * 1.2, 1)
+	)
+
+	button.MouseEnter:Connect(function()
+		TweenService:Create(button, TweenInfo.new(0.2, Enum.EasingStyle.Quad), {
+			BackgroundColor3 = hoverColor
+		}):Play()
+		TweenService:Create(stroke, TweenInfo.new(0.2, Enum.EasingStyle.Quad), {
+			Thickness = 3,
+			Transparency = 0
+		}):Play()
+	end)
+
+	button.MouseLeave:Connect(function()
+		TweenService:Create(button, TweenInfo.new(0.2, Enum.EasingStyle.Quad), {
+			BackgroundColor3 = originalColor
+		}):Play()
+		TweenService:Create(stroke, TweenInfo.new(0.2, Enum.EasingStyle.Quad), {
+			Thickness = 2,
+			Transparency = 0.3
+		}):Play()
+	end)
+
+	button.MouseButton1Down:Connect(function()
+		TweenService:Create(button, TweenInfo.new(0.1, Enum.EasingStyle.Quad), {
+			Size = UDim2.new(0.98, 0, 0, 66)
+		}):Play()
+	end)
+
+	button.MouseButton1Up:Connect(function()
+		TweenService:Create(button, TweenInfo.new(0.1, Enum.EasingStyle.Quad), {
+			Size = UDim2.new(1, 0, 0, 70)
+		}):Play()
+	end)
+
+	return button, stroke
+end
+
+-- Erstellt einen schönen Container mit Blur-Effekt
+local function createBeautifulContainer(parent, title)
+	-- Hauptcontainer
+	local container = Instance.new("Frame")
+	container.Name = "MainContainer"
+	container.AnchorPoint = Vector2.new(0.5, 0.5)
+	container.Position = UDim2.new(0.5, 0, 0.5, 0)
+	-- Responsive: Auf Mobile größer
+	if isMobile then
+		container.Size = UDim2.new(0.92, 0, 0, 500)
+	else
+		container.Size = UDim2.new(0, 480, 0, 480)
+	end
+	container.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
+	container.BackgroundTransparency = 0.05
+	container.BorderSizePixel = 0
+	container.Parent = parent
+
+	-- Max Size Constraint
+	local sizeConstraint = Instance.new("UISizeConstraint")
+	sizeConstraint.MaxSize = Vector2.new(520, 550)
+	sizeConstraint.Parent = container
+
+	-- Abgerundete Ecken
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 20)
+	corner.Parent = container
+
+	-- Äußerer Glow/Stroke
+	local outerStroke = Instance.new("UIStroke")
+	outerStroke.Color = Color3.fromRGB(100, 100, 140)
+	outerStroke.Thickness = 2
+	outerStroke.Transparency = 0.5
+	outerStroke.Parent = container
+
+	-- Header
+	local header = Instance.new("Frame")
+	header.Name = "Header"
+	header.Size = UDim2.new(1, 0, 0, 70)
+	header.BackgroundColor3 = Color3.fromRGB(35, 35, 50)
+	header.BackgroundTransparency = 0.3
+	header.BorderSizePixel = 0
+	header.Parent = container
+
+	local headerCorner = Instance.new("UICorner")
+	headerCorner.CornerRadius = UDim.new(0, 20)
+	headerCorner.Parent = header
+
+	-- Header Bottom Cover (um untere Ecken zu verstecken)
+	local headerCover = Instance.new("Frame")
+	headerCover.Size = UDim2.new(1, 0, 0, 25)
+	headerCover.Position = UDim2.new(0, 0, 1, -25)
+	headerCover.BackgroundColor3 = Color3.fromRGB(35, 35, 50)
+	headerCover.BackgroundTransparency = 0.3
+	headerCover.BorderSizePixel = 0
+	headerCover.Parent = header
+
+	-- Titel
+	local titleLabel = Instance.new("TextLabel")
+	titleLabel.Name = "Title"
+	titleLabel.Size = UDim2.new(1, -40, 1, -10)
+	titleLabel.Position = UDim2.new(0, 20, 0, 5)
+	titleLabel.BackgroundTransparency = 1
+	titleLabel.Text = title
+	titleLabel.TextColor3 = Color3.new(1, 1, 1)
+	titleLabel.TextScaled = true
+	titleLabel.Font = Enum.Font.GothamBold
+	titleLabel.TextXAlignment = Enum.TextXAlignment.Center
+	titleLabel.Parent = header
+
+	-- Dekorative Linie unter Header
+	local headerLine = Instance.new("Frame")
+	headerLine.Size = UDim2.new(0.9, 0, 0, 2)
+	headerLine.Position = UDim2.new(0.05, 0, 0, 70)
+	headerLine.BackgroundColor3 = Color3.fromRGB(80, 80, 120)
+	headerLine.BackgroundTransparency = 0.5
+	headerLine.BorderSizePixel = 0
+	headerLine.Parent = container
+
+	local lineCorner = Instance.new("UICorner")
+	lineCorner.CornerRadius = UDim.new(0, 1)
+	lineCorner.Parent = headerLine
+
+	-- Gradient für die Linie
+	local lineGradient = Instance.new("UIGradient")
+	lineGradient.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, Color3.fromRGB(60, 60, 100)),
+		ColorSequenceKeypoint.new(0.5, Color3.fromRGB(120, 120, 180)),
+		ColorSequenceKeypoint.new(1, Color3.fromRGB(60, 60, 100))
+	})
+	lineGradient.Parent = headerLine
+
+	return container
+end
+
+print("[LOBBY CLIENT] RemoteEvents loaded successfully")
+
+-- GUI Creation Functions
+local function createMultiplayerPrompt()
+	local screenGui = Instance.new("ScreenGui")
+	screenGui.Name = "MultiplayerPrompt"
+	screenGui.ResetOnSpawn = false
+	screenGui.IgnoreGuiInset = true
+	screenGui.DisplayOrder = 10
+
+	-- Dark overlay mit Blur-Effekt
+	local overlay = Instance.new("Frame")
+	overlay.Name = "Overlay"
+	overlay.Size = UDim2.new(1, 0, 1, 0)
+	overlay.BackgroundColor3 = Color3.new(0, 0, 0)
+	overlay.BackgroundTransparency = 1 -- Startet transparent für Animation
+	overlay.BorderSizePixel = 0
+	overlay.Parent = screenGui
+
+	-- Hauptcontainer
+	local container = createBeautifulContainer(screenGui, "Multiplayer Match")
+
+	-- Container startet klein für Animation
+	container.Size = UDim2.new(0, 0, 0, 0)
+	container.BackgroundTransparency = 1
+
+	-- Content Bereich
+	local content = Instance.new("Frame")
+	content.Name = "Content"
+	content.Size = UDim2.new(0.9, 0, 0, 180)
+	content.Position = UDim2.new(0.05, 0, 0, 85)
+	content.BackgroundTransparency = 1
+	content.Parent = container
+
+	-- Frage Text
+	local questionLabel = Instance.new("TextLabel")
+	questionLabel.Size = UDim2.new(1, 0, 0, 50)
+	questionLabel.Position = UDim2.new(0, 0, 0, 10)
+	questionLabel.BackgroundTransparency = 1
+	questionLabel.Text = "Möchtest du ein Multiplayer-Match starten?"
+	questionLabel.TextColor3 = Color3.fromRGB(200, 200, 220)
+	questionLabel.TextScaled = true
+	questionLabel.Font = Enum.Font.Gotham
+	questionLabel.Parent = content
+
+	-- Info Text
+	local infoLabel = Instance.new("TextLabel")
+	infoLabel.Size = UDim2.new(1, 0, 0, 30)
+	infoLabel.Position = UDim2.new(0, 0, 0, 55)
+	infoLabel.BackgroundTransparency = 1
+	infoLabel.Text = "Du wirst mit einem anderen Spieler gematched"
+	infoLabel.TextColor3 = Color3.fromRGB(150, 150, 170)
+	infoLabel.TextScaled = true
+	infoLabel.Font = Enum.Font.Gotham
+	infoLabel.Parent = content
+
+	-- Button Container
+	local buttonContainer = Instance.new("Frame")
+	buttonContainer.Size = UDim2.new(1, 0, 0, 70)
+	buttonContainer.Position = UDim2.new(0, 0, 0, 100)
+	buttonContainer.BackgroundTransparency = 1
+	buttonContainer.Parent = content
+
+	local buttonLayout = Instance.new("UIListLayout")
+	buttonLayout.FillDirection = Enum.FillDirection.Horizontal
+	buttonLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+	buttonLayout.Padding = UDim.new(0, 20)
+	buttonLayout.Parent = buttonContainer
+
+	-- Ja Button
+	local yesButton = Instance.new("TextButton")
+	yesButton.Size = UDim2.new(0, 150, 0, 55)
+	yesButton.BackgroundColor3 = Color3.fromRGB(50, 180, 100)
+	yesButton.Text = ""
+	yesButton.AutoButtonColor = false
+	yesButton.Parent = buttonContainer
+
+	local yesCorner = Instance.new("UICorner")
+	yesCorner.CornerRadius = UDim.new(0, 12)
+	yesCorner.Parent = yesButton
+
+	local yesGradient = Instance.new("UIGradient")
+	yesGradient.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, Color3.new(1, 1, 1)),
+		ColorSequenceKeypoint.new(1, Color3.new(0.85, 0.85, 0.85))
+	})
+	yesGradient.Rotation = 90
+	yesGradient.Parent = yesButton
+
+	local yesLabel = Instance.new("TextLabel")
+	yesLabel.Size = UDim2.new(1, 0, 1, 0)
+	yesLabel.BackgroundTransparency = 1
+	yesLabel.Text = "Ja, starten!"
+	yesLabel.TextColor3 = Color3.new(1, 1, 1)
+	yesLabel.TextScaled = true
+	yesLabel.Font = Enum.Font.GothamBold
+	yesLabel.Parent = yesButton
+
+	-- Nein Button
+	local noButton = Instance.new("TextButton")
+	noButton.Size = UDim2.new(0, 150, 0, 55)
+	noButton.BackgroundColor3 = Color3.fromRGB(180, 60, 60)
+	noButton.Text = ""
+	noButton.AutoButtonColor = false
+	noButton.Parent = buttonContainer
+
+	local noCorner = Instance.new("UICorner")
+	noCorner.CornerRadius = UDim.new(0, 12)
+	noCorner.Parent = noButton
+
+	local noGradient = Instance.new("UIGradient")
+	noGradient.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, Color3.new(1, 1, 1)),
+		ColorSequenceKeypoint.new(1, Color3.new(0.85, 0.85, 0.85))
+	})
+	noGradient.Rotation = 90
+	noGradient.Parent = noButton
+
+	local noLabel = Instance.new("TextLabel")
+	noLabel.Size = UDim2.new(1, 0, 1, 0)
+	noLabel.BackgroundTransparency = 1
+	noLabel.Text = "Nein"
+	noLabel.TextColor3 = Color3.new(1, 1, 1)
+	noLabel.TextScaled = true
+	noLabel.Font = Enum.Font.GothamBold
+	noLabel.Parent = noButton
+
+	-- Hover Effekte
+	for _, btn in pairs({yesButton, noButton}) do
+		btn.MouseEnter:Connect(function()
+			TweenService:Create(btn, TweenInfo.new(0.15), {Size = UDim2.new(0, 160, 0, 58)}):Play()
+		end)
+		btn.MouseLeave:Connect(function()
+			TweenService:Create(btn, TweenInfo.new(0.15), {Size = UDim2.new(0, 150, 0, 55)}):Play()
+		end)
+	end
+
+	-- Button Clicks
+	yesButton.MouseButton1Click:Connect(function()
+		isInMatchmaking = true
+		if playerResponse then
+			playerResponse:FireServer("multiplayer_accept")
+		end
+		-- Ausblend-Animation
+		TweenService:Create(container, TweenInfo.new(0.2), {Size = UDim2.new(0, 0, 0, 0), BackgroundTransparency = 1}):Play()
+		TweenService:Create(overlay, TweenInfo.new(0.2), {BackgroundTransparency = 1}):Play()
+		task.wait(0.2)
+		screenGui:Destroy()
+	end)
+
+	noButton.MouseButton1Click:Connect(function()
+		TweenService:Create(container, TweenInfo.new(0.2), {Size = UDim2.new(0, 0, 0, 0), BackgroundTransparency = 1}):Play()
+		TweenService:Create(overlay, TweenInfo.new(0.2), {BackgroundTransparency = 1}):Play()
+		task.wait(0.2)
+		screenGui:Destroy()
+	end)
+
+	-- Einblend-Animation
+	task.spawn(function()
+		TweenService:Create(overlay, TweenInfo.new(0.3), {BackgroundTransparency = 0.5}):Play()
+		TweenService:Create(container, TweenInfo.new(0.35, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+			Size = isMobile and UDim2.new(0.9, 0, 0, 280) or UDim2.new(0, 420, 0, 280),
+			BackgroundTransparency = 0.05
+		}):Play()
+	end)
+
+	return screenGui
+end
+
+local function createSingleplayerPrompt()
+	local screenGui = Instance.new("ScreenGui")
+	screenGui.Name = "SingleplayerPrompt"
+	screenGui.ResetOnSpawn = false
+	screenGui.IgnoreGuiInset = true
+	screenGui.DisplayOrder = 10
+
+	-- Dark overlay
+	local overlay = Instance.new("Frame")
+	overlay.Name = "Overlay"
+	overlay.Size = UDim2.new(1, 0, 1, 0)
+	overlay.BackgroundColor3 = Color3.new(0, 0, 0)
+	overlay.BackgroundTransparency = 1
+	overlay.BorderSizePixel = 0
+	overlay.Parent = screenGui
+
+	-- Hauptcontainer
+	local container = createBeautifulContainer(screenGui, "Wähle deine Schwierigkeit")
+	container.Size = UDim2.new(0, 0, 0, 0)
+	container.BackgroundTransparency = 1
+
+	-- Content Bereich
+	local content = Instance.new("Frame")
+	content.Name = "Content"
+	content.Size = UDim2.new(0.9, 0, 0, 340)
+	content.Position = UDim2.new(0.05, 0, 0, 80)
+	content.BackgroundTransparency = 1
+	content.Parent = container
+
+	-- Button Container mit UIListLayout
+	local buttonContainer = Instance.new("Frame")
+	buttonContainer.Name = "ButtonContainer"
+	buttonContainer.Size = UDim2.new(1, 0, 0, 300)
+	buttonContainer.Position = UDim2.new(0, 0, 0, 0)
+	buttonContainer.BackgroundTransparency = 1
+	buttonContainer.Parent = content
+
+	local buttonLayout = Instance.new("UIListLayout")
+	buttonLayout.FillDirection = Enum.FillDirection.Vertical
+	buttonLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+	buttonLayout.VerticalAlignment = Enum.VerticalAlignment.Top
+	buttonLayout.SortOrder = Enum.SortOrder.LayoutOrder
+	buttonLayout.Padding = UDim.new(0, 10)
+	buttonLayout.Parent = buttonContainer
+
+	-- Schwierigkeits-Daten
+	local difficulties = {
+		{
+			name = "EASY",
+			color = Color3.fromRGB(70, 200, 120),
+			secondaryColor = Color3.fromRGB(40, 140, 80),
+			reward = "2 Panzaros",
+			description = "Perfekt für Anfänger",
+			icon = "🌱"
+		},
+		{
+			name = "MEDIUM",
+			color = Color3.fromRGB(255, 180, 50),
+			secondaryColor = Color3.fromRGB(200, 130, 30),
+			reward = "4 Panzaros",
+			description = "Ausgewogene Herausforderung",
+			icon = "⚔️"
+		},
+		{
+			name = "HARD",
+			color = Color3.fromRGB(220, 70, 70),
+			secondaryColor = Color3.fromRGB(160, 40, 40),
+			reward = "6 Panzaros",
+			description = "Für erfahrene Spieler",
+			icon = "🔥"
+		},
+		{
+			name = "INSANE",
+			color = Color3.fromRGB(160, 50, 220),
+			secondaryColor = Color3.fromRGB(100, 20, 160),
+			reward = "10 Panzaros",
+			description = "Nur für die Besten!",
+			icon = "💀"
+		}
+	}
+
+	local difficultyButtons = {}
+
+	for i, diff in ipairs(difficulties) do
+		local button = Instance.new("TextButton")
+		button.Name = diff.name .. "Button"
+		button.Size = UDim2.new(1, 0, 0, 65)
+		button.BackgroundColor3 = diff.color
+		button.Text = ""
+		button.AutoButtonColor = false
+		button.LayoutOrder = i
+		button.Parent = buttonContainer
+
+		local corner = Instance.new("UICorner")
+		corner.CornerRadius = UDim.new(0, 14)
+		corner.Parent = button
+
+		local gradient = Instance.new("UIGradient")
+		gradient.Color = ColorSequence.new({
+			ColorSequenceKeypoint.new(0, Color3.new(1, 1, 1)),
+			ColorSequenceKeypoint.new(0.5, Color3.new(0.95, 0.95, 0.95)),
+			ColorSequenceKeypoint.new(1, Color3.new(0.8, 0.8, 0.8))
+		})
+		gradient.Rotation = 90
+		gradient.Parent = button
+
+		local stroke = Instance.new("UIStroke")
+		stroke.Color = diff.secondaryColor
+		stroke.Thickness = 2
+		stroke.Transparency = 0.3
+		stroke.Parent = button
+
+		-- Icon
+		local icon = Instance.new("TextLabel")
+		icon.Size = UDim2.new(0, 40, 0, 40)
+		icon.Position = UDim2.new(0, 15, 0.5, -20)
+		icon.BackgroundTransparency = 1
+		icon.Text = diff.icon
+		icon.TextScaled = true
+		icon.Parent = button
+
+		-- Name
+		local nameLabel = Instance.new("TextLabel")
+		nameLabel.Size = UDim2.new(0, 120, 0, 30)
+		nameLabel.Position = UDim2.new(0, 60, 0, 8)
+		nameLabel.BackgroundTransparency = 1
+		nameLabel.Text = diff.name
+		nameLabel.TextColor3 = Color3.new(1, 1, 1)
+		nameLabel.TextScaled = true
+		nameLabel.Font = Enum.Font.GothamBold
+		nameLabel.TextXAlignment = Enum.TextXAlignment.Left
+		nameLabel.TextStrokeTransparency = 0.5
+		nameLabel.TextStrokeColor3 = diff.secondaryColor
+		nameLabel.Parent = button
+
+		-- Description
+		local descLabel = Instance.new("TextLabel")
+		descLabel.Size = UDim2.new(0, 200, 0, 20)
+		descLabel.Position = UDim2.new(0, 60, 0, 36)
+		descLabel.BackgroundTransparency = 1
+		descLabel.Text = diff.description
+		descLabel.TextColor3 = Color3.fromRGB(230, 230, 240)
+		descLabel.TextScaled = true
+		descLabel.Font = Enum.Font.Gotham
+		descLabel.TextXAlignment = Enum.TextXAlignment.Left
+		descLabel.TextTransparency = 0.2
+		descLabel.Parent = button
+
+		-- Reward Badge
+		local rewardBadge = Instance.new("Frame")
+		rewardBadge.Size = UDim2.new(0, 100, 0, 28)
+		rewardBadge.Position = UDim2.new(1, -115, 0.5, -14)
+		rewardBadge.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
+		rewardBadge.BackgroundTransparency = 0.3
+		rewardBadge.Parent = button
+
+		local badgeCorner = Instance.new("UICorner")
+		badgeCorner.CornerRadius = UDim.new(0, 8)
+		badgeCorner.Parent = rewardBadge
+
+		local rewardLabel = Instance.new("TextLabel")
+		rewardLabel.Size = UDim2.new(1, -10, 1, 0)
+		rewardLabel.Position = UDim2.new(0, 5, 0, 0)
+		rewardLabel.BackgroundTransparency = 1
+		rewardLabel.Text = "🪙 " .. diff.reward
+		rewardLabel.TextColor3 = Color3.fromRGB(255, 215, 0)
+		rewardLabel.TextScaled = true
+		rewardLabel.Font = Enum.Font.GothamBold
+		rewardLabel.Parent = rewardBadge
+
+		-- Hover Effekte
+		local originalColor = diff.color
+		button.MouseEnter:Connect(function()
+			TweenService:Create(button, TweenInfo.new(0.15), {
+				BackgroundColor3 = Color3.new(
+					math.min(originalColor.R * 1.15, 1),
+					math.min(originalColor.G * 1.15, 1),
+					math.min(originalColor.B * 1.15, 1)
+				)
+			}):Play()
+			TweenService:Create(stroke, TweenInfo.new(0.15), {Thickness = 3, Transparency = 0}):Play()
+		end)
+
+		button.MouseLeave:Connect(function()
+			TweenService:Create(button, TweenInfo.new(0.15), {BackgroundColor3 = originalColor}):Play()
+			TweenService:Create(stroke, TweenInfo.new(0.15), {Thickness = 2, Transparency = 0.3}):Play()
+		end)
+
+		difficultyButtons[diff.name:lower()] = button
+
+		-- Spezialeffekt für INSANE
+		if diff.name == "INSANE" then
+			task.spawn(function()
+				while button.Parent do
+					TweenService:Create(stroke, TweenInfo.new(0.6, Enum.EasingStyle.Sine), {
+						Color = Color3.fromRGB(255, 100, 255)
+					}):Play()
+					task.wait(0.6)
+					TweenService:Create(stroke, TweenInfo.new(0.6, Enum.EasingStyle.Sine), {
+						Color = Color3.fromRGB(180, 0, 220)
+					}):Play()
+					task.wait(0.6)
+				end
+			end)
+		end
+	end
+
+	-- Abbrechen Button
+	local cancelButton = Instance.new("TextButton")
+	cancelButton.Size = UDim2.new(0.5, 0, 0, 40)
+	cancelButton.Position = UDim2.new(0.25, 0, 0, 320)
+	cancelButton.BackgroundColor3 = Color3.fromRGB(60, 60, 70)
+	cancelButton.Text = ""
+	cancelButton.AutoButtonColor = false
+	cancelButton.Parent = content
+
+	local cancelCorner = Instance.new("UICorner")
+	cancelCorner.CornerRadius = UDim.new(0, 10)
+	cancelCorner.Parent = cancelButton
+
+	local cancelLabel = Instance.new("TextLabel")
+	cancelLabel.Size = UDim2.new(1, 0, 1, 0)
+	cancelLabel.BackgroundTransparency = 1
+	cancelLabel.Text = "Abbrechen"
+	cancelLabel.TextColor3 = Color3.fromRGB(180, 180, 190)
+	cancelLabel.TextScaled = true
+	cancelLabel.Font = Enum.Font.GothamSemibold
+	cancelLabel.Parent = cancelButton
+
+	cancelButton.MouseEnter:Connect(function()
+		TweenService:Create(cancelButton, TweenInfo.new(0.15), {BackgroundColor3 = Color3.fromRGB(80, 80, 90)}):Play()
+	end)
+	cancelButton.MouseLeave:Connect(function()
+		TweenService:Create(cancelButton, TweenInfo.new(0.15), {BackgroundColor3 = Color3.fromRGB(60, 60, 70)}):Play()
+	end)
+
+	-- Countdown Funktion (schöner!)
+	local function showCountdown(difficulty, diffColor)
+		isInCountdown = true
+		closeAllPrompts()
+
+		local countdownGui = Instance.new("ScreenGui")
+		countdownGui.Name = "TeleportCountdown"
+		countdownGui.ResetOnSpawn = false
+		countdownGui.IgnoreGuiInset = true
+		countdownGui.DisplayOrder = 20
+
+		-- Dark overlay
+		local cdOverlay = Instance.new("Frame")
+		cdOverlay.Size = UDim2.new(1, 0, 1, 0)
+		cdOverlay.BackgroundColor3 = Color3.new(0, 0, 0)
+		cdOverlay.BackgroundTransparency = 0.4
+		cdOverlay.BorderSizePixel = 0
+		cdOverlay.Parent = countdownGui
+
+		-- Hauptcontainer
+		local cdContainer = Instance.new("Frame")
+		cdContainer.Name = "CountdownContainer"
+		cdContainer.AnchorPoint = Vector2.new(0.5, 0.5)
+		cdContainer.Position = UDim2.new(0.5, 0, 0.5, 0)
+		cdContainer.Size = isMobile and UDim2.new(0.85, 0, 0, 320) or UDim2.new(0, 400, 0, 320)
+		cdContainer.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
+		cdContainer.BackgroundTransparency = 0.05
+		cdContainer.BorderSizePixel = 0
+		cdContainer.Parent = countdownGui
+
+		local sizeConstraint = Instance.new("UISizeConstraint")
+		sizeConstraint.MaxSize = Vector2.new(450, 350)
+		sizeConstraint.Parent = cdContainer
+
+		local cdCorner = Instance.new("UICorner")
+		cdCorner.CornerRadius = UDim.new(0, 20)
+		cdCorner.Parent = cdContainer
+
+		local cdStroke = Instance.new("UIStroke")
+		cdStroke.Color = diffColor or Color3.fromRGB(100, 100, 140)
+		cdStroke.Thickness = 3
+		cdStroke.Parent = cdContainer
+
+		-- Titel
+		local cdTitle = Instance.new("TextLabel")
+		cdTitle.Size = UDim2.new(1, -40, 0, 50)
+		cdTitle.Position = UDim2.new(0, 20, 0, 20)
+		cdTitle.BackgroundTransparency = 1
+		cdTitle.Text = "Starte " .. difficulty:upper() .. " Modus"
+		cdTitle.TextColor3 = diffColor or Color3.new(1, 1, 1)
+		cdTitle.TextScaled = true
+		cdTitle.Font = Enum.Font.GothamBold
+		cdTitle.Parent = cdContainer
+
+		-- Großer Countdown-Kreis
+		local circleContainer = Instance.new("Frame")
+		circleContainer.Size = UDim2.new(0, 150, 0, 150)
+		circleContainer.Position = UDim2.new(0.5, -75, 0, 80)
+		circleContainer.BackgroundColor3 = diffColor or Color3.fromRGB(80, 80, 120)
+		circleContainer.BackgroundTransparency = 0.7
+		circleContainer.Parent = cdContainer
+
+		local circleCorner = Instance.new("UICorner")
+		circleCorner.CornerRadius = UDim.new(1, 0)
+		circleCorner.Parent = circleContainer
+
+		local circleStroke = Instance.new("UIStroke")
+		circleStroke.Color = diffColor or Color3.fromRGB(120, 120, 180)
+		circleStroke.Thickness = 4
+		circleStroke.Parent = circleContainer
+
+		-- Countdown Zahl
+		local countdownLabel = Instance.new("TextLabel")
+		countdownLabel.Size = UDim2.new(1, 0, 1, 0)
+		countdownLabel.BackgroundTransparency = 1
+		countdownLabel.Text = "10"
+		countdownLabel.TextColor3 = Color3.new(1, 1, 1)
+		countdownLabel.TextScaled = true
+		countdownLabel.Font = Enum.Font.GothamBold
+		countdownLabel.Parent = circleContainer
+
+		-- Loading Text
+		local loadingText = Instance.new("TextLabel")
+		loadingText.Size = UDim2.new(1, -40, 0, 30)
+		loadingText.Position = UDim2.new(0, 20, 0, 250)
+		loadingText.BackgroundTransparency = 1
+		loadingText.Text = "Bereite Teleport vor..."
+		loadingText.TextColor3 = Color3.fromRGB(180, 180, 200)
+		loadingText.TextScaled = true
+		loadingText.Font = Enum.Font.Gotham
+		loadingText.Parent = cdContainer
+
+		-- Punkte-Animation
+		task.spawn(function()
+			local dots = {".", "..", "...", ""}
+			local i = 1
+			while countdownGui.Parent do
+				if loadingText.Text:find("Bereite") then
+					loadingText.Text = "Bereite Teleport vor" .. dots[i]
+				end
+				i = (i % 4) + 1
+				task.wait(0.4)
+			end
+		end)
+
+		countdownGui.Parent = playerGui
+
+		-- Countdown Animation
+		for i = 10, 1, -1 do
+			countdownLabel.Text = tostring(i)
+
+			-- Pulseffekt
+			TweenService:Create(circleContainer, TweenInfo.new(0.15, Enum.EasingStyle.Quad), {
+				Size = UDim2.new(0, 160, 0, 160),
+				Position = UDim2.new(0.5, -80, 0, 75)
+			}):Play()
+			TweenService:Create(countdownLabel, TweenInfo.new(0.15), {
+				TextColor3 = Color3.new(1, 1, 1)
+			}):Play()
+
+			task.wait(0.15)
+
+			TweenService:Create(circleContainer, TweenInfo.new(0.35, Enum.EasingStyle.Quad), {
+				Size = UDim2.new(0, 150, 0, 150),
+				Position = UDim2.new(0.5, -75, 0, 80)
+			}):Play()
+			TweenService:Create(countdownLabel, TweenInfo.new(0.35), {
+				TextColor3 = diffColor or Color3.fromRGB(255, 200, 50)
+			}):Play()
+
+			task.wait(0.85)
+		end
+
+		-- GO!
+		countdownLabel.Text = "GO!"
+		loadingText.Text = "Teleportiere..."
+
+		TweenService:Create(circleContainer, TweenInfo.new(0.3, Enum.EasingStyle.Back), {
+			Size = UDim2.new(0, 180, 0, 180),
+			Position = UDim2.new(0.5, -90, 0, 65),
+			BackgroundTransparency = 0.3
+		}):Play()
+		TweenService:Create(countdownLabel, TweenInfo.new(0.3), {
+			TextColor3 = Color3.fromRGB(100, 255, 100)
+		}):Play()
+
+		task.wait(0.8)
+
+		-- Ausblenden
+		TweenService:Create(cdContainer, TweenInfo.new(0.3), {BackgroundTransparency = 1}):Play()
+		TweenService:Create(cdOverlay, TweenInfo.new(0.3), {BackgroundTransparency = 1}):Play()
+
+		task.wait(0.3)
+		countdownGui:Destroy()
+		isInCountdown = false
+	end
+
+	-- Button Clicks
+	difficultyButtons["easy"].MouseButton1Click:Connect(function()
+		if playerResponse then
+			playerResponse:FireServer("singleplayer_start", "easy")
+			TweenService:Create(container, TweenInfo.new(0.2), {Size = UDim2.new(0, 0, 0, 0)}):Play()
+			task.wait(0.2)
+			screenGui:Destroy()
+			showCountdown("easy", Color3.fromRGB(70, 200, 120))
+		end
+	end)
+
+	difficultyButtons["medium"].MouseButton1Click:Connect(function()
+		if playerResponse then
+			playerResponse:FireServer("singleplayer_start", "medium")
+			TweenService:Create(container, TweenInfo.new(0.2), {Size = UDim2.new(0, 0, 0, 0)}):Play()
+			task.wait(0.2)
+			screenGui:Destroy()
+			showCountdown("medium", Color3.fromRGB(255, 180, 50))
+		end
+	end)
+
+	difficultyButtons["hard"].MouseButton1Click:Connect(function()
+		if playerResponse then
+			playerResponse:FireServer("singleplayer_start", "hard")
+			TweenService:Create(container, TweenInfo.new(0.2), {Size = UDim2.new(0, 0, 0, 0)}):Play()
+			task.wait(0.2)
+			screenGui:Destroy()
+			showCountdown("hard", Color3.fromRGB(220, 70, 70))
+		end
+	end)
+
+	difficultyButtons["insane"].MouseButton1Click:Connect(function()
+		if playerResponse then
+			playerResponse:FireServer("singleplayer_start", "insane")
+			TweenService:Create(container, TweenInfo.new(0.2), {Size = UDim2.new(0, 0, 0, 0)}):Play()
+			task.wait(0.2)
+			screenGui:Destroy()
+			showCountdown("insane", Color3.fromRGB(160, 50, 220))
+		end
+	end)
+
+	cancelButton.MouseButton1Click:Connect(function()
+		if playerResponse then
+			playerResponse:FireServer("prompt_cancelled", "singleplayer")
+		end
+		TweenService:Create(container, TweenInfo.new(0.2), {Size = UDim2.new(0, 0, 0, 0), BackgroundTransparency = 1}):Play()
+		TweenService:Create(overlay, TweenInfo.new(0.2), {BackgroundTransparency = 1}):Play()
+		task.wait(0.2)
+		screenGui:Destroy()
+	end)
+
+	-- Einblend-Animation
+	task.spawn(function()
+		TweenService:Create(overlay, TweenInfo.new(0.3), {BackgroundTransparency = 0.5}):Play()
+		TweenService:Create(container, TweenInfo.new(0.4, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+			Size = isMobile and UDim2.new(0.92, 0, 0, 480) or UDim2.new(0, 480, 0, 480),
+			BackgroundTransparency = 0.05
+		}):Play()
+	end)
+
+	return screenGui
+end
+
+
+-- Remote Event Listeners
+if showMultiplayerPrompt then
+	showMultiplayerPrompt.OnClientEvent:Connect(function()
+		print("[LOBBY CLIENT] Multiplayer Prompt received!")
+
+		-- NEU: Check ob im Countdown oder Matchmaking
+		if isInCountdown or isInMatchmaking then
+			print("[LOBBY CLIENT] In countdown/matchmaking, ignoring prompt")
+			return
+		end
+
+		-- NEU: Schließe alle anderen Prompts bevor neues geöffnet wird
+		closeAllPrompts()
+
+		local prompt = createMultiplayerPrompt()
+		if prompt then
+			activePrompts["multiplayer"] = prompt
+			prompt.Parent = playerGui
+
+			prompt.AncestryChanged:Connect(function()
+				if not prompt.Parent then
+					activePrompts["multiplayer"] = nil
+				end
+			end)
+		end
+	end)
+else
+	warn("[LOBBY CLIENT] ShowMultiplayerPrompt not found!")
+end
+
+if showSingleplayerPrompt then
+	showSingleplayerPrompt.OnClientEvent:Connect(function()
+		print("[LOBBY CLIENT] Singleplayer Prompt received!")
+
+		-- NEU: Check ob im Countdown oder Matchmaking
+		if isInCountdown or isInMatchmaking then
+			print("[LOBBY CLIENT] In countdown/matchmaking, ignoring prompt")
+			return
+		end
+
+		-- NEU: Schließe alle anderen Prompts bevor neues geöffnet wird
+		closeAllPrompts()
+
+		local prompt = createSingleplayerPrompt()
+		if prompt then
+			activePrompts["singleplayer"] = prompt
+			prompt.Parent = playerGui
+
+			prompt.AncestryChanged:Connect(function()
+				if not prompt.Parent then
+					activePrompts["singleplayer"] = nil
+				end
+			end)
+		end
+	end)
+else
+	warn("[LOBBY CLIENT] ShowSingleplayerPrompt not found!")
+end
+
+-- NEU: Handler für Matchmaking Abbruch
+if cancelMatchmaking then
+	cancelMatchmaking.OnClientEvent:Connect(function()
+		isInMatchmaking = false
+	end)
+end
+
+print("[LOBBY CLIENT] Initialized successfully!")

@@ -1,0 +1,98 @@
+-- Roblox Lobby Animations Script
+-- Platziere dieses Script in ServerScriptService
+
+local workspace = game:GetService("Workspace")
+
+-- Warte bis alle Modelle geladen sind
+wait(2)
+
+-- Funktion zum Abspielen von Animationen auf AnimationController
+local function playAnimation(model, animationId)
+	-- Suche nach AnimationController im Modell
+	local animController = model:FindFirstChildOfClass("AnimationController")
+
+	if animController then
+		-- Finde oder erstelle einen Animator
+		local animator = animController:FindFirstChild("Animator")
+		if not animator then
+			animator = Instance.new("Animator")
+			animator.Parent = animController
+		end
+
+		-- Erstelle Animation
+		local animation = Instance.new("Animation")
+		animation.AnimationId = "rbxassetid://" .. animationId
+
+		-- Lade und spiele Animation
+		local animTrack = animator:LoadAnimation(animation)
+		animTrack.Looped = true
+		animTrack:Play()
+
+		print("Animation " .. animationId .. " wird auf " .. model.Name .. " abgespielt")
+	else
+		warn("Kein AnimationController in " .. model.Name .. " gefunden!")
+	end
+end
+
+-- Hauptfunktion
+local function setupAnimations()
+	local allesModel = workspace:WaitForChild("Alles")
+
+	-- VIP Animationen
+	local toniVIP = allesModel:FindFirstChild("TONI VIP")
+	if toniVIP then
+		playAnimation(toniVIP, "130126975879594")
+	else
+		warn("TONI VIP nicht gefunden!")
+	end
+
+	local ichVIP = allesModel:FindFirstChild("ICH VIP")
+	if ichVIP then
+		playAnimation(ichVIP, "98818923607279")
+	else
+		warn("ICH VIP nicht gefunden!")
+	end
+
+	-- Langtheke Animationen
+	local toniLangtheke = allesModel:FindFirstChild("TONI Langtheke")
+	if toniLangtheke then
+		playAnimation(toniLangtheke, "90397387251936")
+	else
+		warn("TONI Langtheke nicht gefunden!")
+	end
+
+	local ichLangtheke = allesModel:FindFirstChild("ICH Langtheke")
+	if ichLangtheke then
+		playAnimation(ichLangtheke, "135502984387000")
+	else
+		warn("ICH Langtheke nicht gefunden!")
+	end
+
+	-- Kugelbar Animationen (AKTUALISIERT MIT NEUEN IDs)
+	local ichKugelbar = allesModel:FindFirstChild("ICH Kugelbar")
+	if ichKugelbar then
+		playAnimation(ichKugelbar, "74056965367125") -- NEUE ANIMATION ID
+	else
+		warn("ICH Kugelbar nicht gefunden!")
+	end
+
+	local toniKugelbar = allesModel:FindFirstChild("TONI Kugelbar")
+	if toniKugelbar then
+		playAnimation(toniKugelbar, "98803593129420") -- NEUE ANIMATION ID
+	else
+		warn("TONI Kugelbar nicht gefunden!")
+	end
+end
+
+-- Script starten
+setupAnimations()
+
+-- Optional: Falls die Modelle später spawnen, kannst du diesen Code verwenden:
+--[[
+workspace.ChildAdded:Connect(function(child)
+    if child.Name == "Alles" then
+        wait(1)
+        setupAnimations()
+    end
+end)
+--]]

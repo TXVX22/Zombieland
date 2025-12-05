@@ -1,0 +1,538 @@
+-- PlayerManager.lua
+-- Platzierung: ServerScriptService/Modules/PlayerManager (ModuleScript)
+
+local PlayerManager = {}
+
+-- Services
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+
+-- Modules
+local GameConfig = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("GameConfig"))
+
+-- Remotes (warten auf MainGameServer)
+local Remotes = ReplicatedStorage:WaitForChild("Remotes", 30)
+local PlayerDataRemote = Remotes:WaitForChild("PlayerData", 10)
+local LevelUpRemote = Remotes:WaitForChild("LevelUp", 10)
+local ExpGainedRemote = Remotes:WaitForChild("ExpGained", 10)
+local PlayerDiedRemote = Remotes:WaitForChild("PlayerDied", 10)
+local PlayerRespawnRemote = Remotes:WaitForChild("PlayerRespawn", 10)
+
+-- Player Data Storage
+local PlayerData = {}
+
+-- Assets
+local PlayerModelsFolder = ReplicatedStorage:WaitForChild("Assets"):WaitForChild("PlayerModel")
+
+-- Player Spawns (wird bei Initialize gesucht)
+local PlayerSpawns = {}
+
+-- ═══════════════════════════════════════════════════════════════
+-- SPIELER DATEN STRUKTUR
+-- ═══════════════════════════════════════════════════════════════
+
+local function CreateDefaultPlayerData(player)
+	return {
+		Player = player,
+		Level = 1,
+		CurrentExp = 0,
+		MaxExp = GameConfig.GetExpForLevel(1),
+		MaxHealth = GameConfig.GetMaxHealth(1),
+		CurrentHealth = GameConfig.GetMaxHealth(1),
+		SelectedWeapon = 1, -- Pistole (Level 1)
+		UnlockedWeapons = {1}, -- Nur Pistole freigeschaltet
+		CharacterModel = nil, -- "Toni" oder "Denis"
+		IsDead = false,
+		TotalKills = 0,
+		TotalDamageDealt = 0
+	}
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- INITIALISIERUNG
+-- ═══════════════════════════════════════════════════════════════
+
+function PlayerManager.Initialize()
+	print("[PlayerManager] Initializing...")
+
+	-- Finde Player Spawn Locations
+	local spawnFolder = workspace:FindFirstChild("PlayerSpawns")
+	if spawnFolder then
+		for _, spawn in pairs(spawnFolder:GetChildren()) do
+			if spawn:IsA("SpawnLocation") or spawn:IsA("BasePart") then
+				table.insert(PlayerSpawns, spawn)
+				print("[PlayerManager] Found player spawn: " .. spawn.Name)
+			end
+		end
+	end
+
+	-- Fallback: Suche nach SpawnLocation im Workspace
+	if #PlayerSpawns == 0 then
+		for _, spawn in pairs(workspace:GetDescendants()) do
+			if spawn:IsA("SpawnLocation") then
+				table.insert(PlayerSpawns, spawn)
+				print("[PlayerManager] Found SpawnLocation: " .. spawn.Name)
+			end
+		end
+	end
+
+	if #PlayerSpawns == 0 then
+		warn("[PlayerManager] No player spawns found! Players will spawn at default location.")
+	end
+
+	-- Verbinde Spieler Events
+	Players.PlayerAdded:Connect(function(player)
+		PlayerManager.OnPlayerJoined(player)
+	end)
+
+	Players.PlayerRemoving:Connect(function(player)
+		PlayerManager.OnPlayerLeft(player)
+	end)
+
+	-- Bereits verbundene Spieler verarbeiten
+	for _, player in pairs(Players:GetPlayers()) do
+		PlayerManager.OnPlayerJoined(player)
+	end
+
+	print("[PlayerManager] Initialization complete!")
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- SPIELER EVENTS
+-- ═══════════════════════════════════════════════════════════════
+
+function PlayerManager.OnPlayerJoined(player)
+	-- Erstelle Spielerdaten
+	PlayerData[player] = CreateDefaultPlayerData(player)
+
+	-- Wähle zufälliges Charaktermodell
+	local availableModels = GameConfig.Player.Models
+	local randomModel = availableModels[math.random(1, #availableModels)]
+	PlayerData[player].CharacterModel = randomModel
+
+	print("[PlayerManager] Player joined: " .. player.Name .. " with model: " .. randomModel)
+
+	-- Character Spawn Handler
+	player.CharacterAdded:Connect(function(character)
+		PlayerManager.OnCharacterSpawned(player, character)
+	end)
+
+	-- Sende initiale Daten zum Client
+	task.wait(1) -- Warte kurz auf Client-Setup
+	PlayerManager.SyncPlayerData(player)
+end
+
+function PlayerManager.OnPlayerLeft(player)
+	PlayerData[player] = nil
+	print("[PlayerManager] Player left: " .. player.Name)
+end
+
+function PlayerManager.OnCharacterSpawned(player, character)
+	local data = PlayerData[player]
+	if not data then return end
+
+	-- Teleportiere zum Spawn-Punkt (falls vorhanden)
+	if #PlayerSpawns > 0 then
+		local spawnPoint = PlayerSpawns[math.random(1, #PlayerSpawns)]
+		local rootPart = character:WaitForChild("HumanoidRootPart", 5)
+		if rootPart and spawnPoint then
+			-- Warte kurz damit der Character vollstaendig geladen ist
+			task.wait(0.1)
+			rootPart.CFrame = spawnPoint.CFrame + Vector3.new(0, 3, 0)
+		end
+	end
+
+	-- Morph den Charakter zum ausgewählten Model
+	task.wait(0.5) -- Kurze Wartezeit für Charakter-Setup
+	PlayerManager.MorphCharacter(player, data.CharacterModel)
+
+	-- Setze Gesundheit
+	local humanoid = character:WaitForChild("Humanoid", 5)
+	if humanoid then
+		humanoid.MaxHealth = data.MaxHealth
+		humanoid.Health = data.MaxHealth
+		data.CurrentHealth = data.MaxHealth
+		data.IsDead = false
+
+		-- Death Handler
+		humanoid.Died:Connect(function()
+			PlayerManager.OnPlayerDied(player)
+		end)
+
+		-- Health Changed Handler
+		humanoid.HealthChanged:Connect(function(newHealth)
+			data.CurrentHealth = newHealth
+			PlayerDataRemote:FireClient(player, "HealthUpdate", newHealth, data.MaxHealth)
+		end)
+	end
+
+	print("[PlayerManager] Character spawned for: " .. player.Name)
+	PlayerManager.SyncPlayerData(player)
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- CHARACTER MORPHING (100% identisch zum Lobby HybridMorphServer)
+-- ═══════════════════════════════════════════════════════════════
+
+function PlayerManager.MorphCharacter(player, modelName)
+	local character = player.Character
+	if not character then return false end
+
+	local modelTemplate = PlayerModelsFolder:FindFirstChild(modelName)
+	if not modelTemplate then
+		warn("[PlayerManager] Model not found: " .. modelName)
+		return false
+	end
+
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	if not humanoid then return false end
+
+	local rootPart = character:FindFirstChild("HumanoidRootPart")
+	if not rootPart then return false end
+
+	-- Entferne alte Morph-Models falls vorhanden (wie im Lobby)
+	for _, child in pairs(character:GetChildren()) do
+		if child:IsA("Model") and (child.Name:match("^MorphModel") or child.Name:match("^ServerMorph")) then
+			child:Destroy()
+		end
+	end
+
+	-- Verstecke Original-Character Parts (EXAKT wie im Lobby HybridMorphServer)
+	for _, part in ipairs(character:GetDescendants()) do
+		if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then
+			part.Transparency = 1
+			part.CanCollide = false
+		elseif part:IsA("Accessory") then
+			local handle = part:FindFirstChild("Handle")
+			if handle then
+				handle.Transparency = 1
+			end
+		elseif part:IsA("Decal") and part.Name == "face" then
+			part.Transparency = 1
+		end
+	end
+
+	-- Clone das Morph-Model (Name wie im Lobby: ServerMorph_)
+	local morphModel = modelTemplate:Clone()
+	morphModel.Name = "ServerMorph_" .. modelName
+
+	-- Parent das Morph-Model ZUERST zum Character (wie im Lobby Zeile 394)
+	morphModel.Parent = character
+
+	-- Setup morph positioning (wie im Lobby Zeile 396-410)
+	if morphModel:IsA("Model") then
+		local morphRoot = morphModel:FindFirstChild("HumanoidRootPart")
+			or morphModel:FindFirstChild("Torso")
+			or morphModel:FindFirstChild("UpperTorso")
+			or morphModel:FindFirstChild("Root")
+
+		if morphRoot then
+			morphModel.PrimaryPart = morphRoot
+		end
+
+		if morphModel.PrimaryPart then
+			morphModel:SetPrimaryPartCFrame(rootPart.CFrame)
+		end
+	end
+
+	-- ENHANCED WELDING (EXAKT wie im Lobby Zeile 412-469)
+	local morphWelds = {}
+	for _, part in ipairs(morphModel:GetDescendants()) do
+		if part:IsA("BasePart") then
+			part.Anchored = false
+			part.CanCollide = false
+			part.Massless = true
+
+			-- Set custom physics for smoother sync
+			part.CustomPhysicalProperties = PhysicalProperties.new(
+				0.3, -- Very low density
+				0.5, -- Medium friction
+				0,   -- No elasticity
+				1,   -- ElasticityWeight
+				1    -- FrictionWeight
+			)
+
+			-- Root-Parts werden mit Motor6D an HumanoidRootPart verbunden
+			if part.Name == "HumanoidRootPart" or
+				part.Name == "Torso" or
+				part.Name == "UpperTorso" or
+				part.Name == "Root" then
+
+				part.CFrame = rootPart.CFrame
+
+				-- Use Motor6D for smoother movement
+				local motor = Instance.new("Motor6D")
+				motor.Part0 = rootPart
+				motor.Part1 = part
+				motor.C0 = CFrame.new()
+				motor.C1 = CFrame.new()
+				motor.Parent = rootPart
+				table.insert(morphWelds, motor)
+			else
+				-- WICHTIG: Andere Parts an ihren PARENT welden (wie im Lobby Zeile 444-456)
+				-- Das erhaelt die Model-Hierarchie!
+				local parentPart = nil
+				if part.Parent then
+					parentPart = part.Parent:FindFirstChild("HumanoidRootPart")
+						or part.Parent:FindFirstChild("Torso")
+						or part.Parent:FindFirstChild("UpperTorso")
+						or part.Parent:FindFirstChild("Root")
+				end
+
+				-- Fallback zum Character rootPart
+				if not parentPart then
+					parentPart = rootPart
+				end
+
+				if parentPart ~= part then
+					local weld = Instance.new("WeldConstraint")
+					weld.Part0 = parentPart
+					weld.Part1 = part
+					weld.Parent = parentPart
+					table.insert(morphWelds, weld)
+				end
+			end
+		end
+
+		-- Remove scripts and humanoids from morph (wie im Lobby Zeile 460-468)
+		if part:IsA("Script") or part:IsA("LocalScript") then
+			part.Enabled = false
+			part:Destroy()
+		end
+
+		if part:IsA("Humanoid") or part:IsA("Animator") or part:IsA("AnimationController") then
+			part:Destroy()
+		end
+	end
+
+	-- Setze Network Ownership fuer bessere Sync
+	for _, part in ipairs(morphModel:GetDescendants()) do
+		if part:IsA("BasePart") and not part.Anchored then
+			pcall(function()
+				part:SetNetworkOwner(player)
+			end)
+		end
+	end
+
+	-- Setze Attribute fuer Animation-System
+	character:SetAttribute("CharacterModel", modelName)
+
+	-- Tags fuer Client-Animation-System (wie im Lobby Zeile 479-488)
+	local skinTag = Instance.new("StringValue")
+	skinTag.Name = "MorphSkinName"
+	skinTag.Value = modelName
+	skinTag.Parent = morphModel
+
+	local epochTag = Instance.new("StringValue")
+	epochTag.Name = "MorphEpoch"
+	epochTag.Value = "PlayerModel"
+	epochTag.Parent = morphModel
+
+	print("[PlayerManager] Morphed " .. player.Name .. " to " .. modelName .. " (Lobby-Methode)")
+	return true
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- EXP & LEVEL SYSTEM
+-- ═══════════════════════════════════════════════════════════════
+
+function PlayerManager.AddExp(player, amount)
+	local data = PlayerData[player]
+	if not data then return end
+
+	data.CurrentExp = data.CurrentExp + amount
+
+	-- Prüfe Level Up
+	while data.CurrentExp >= data.MaxExp do
+		data.CurrentExp = data.CurrentExp - data.MaxExp
+		PlayerManager.LevelUp(player)
+	end
+
+	-- Informiere Client
+	ExpGainedRemote:FireClient(player, amount, data.CurrentExp, data.MaxExp)
+end
+
+function PlayerManager.LevelUp(player)
+	local data = PlayerData[player]
+	if not data then return end
+
+	data.Level = data.Level + 1
+	data.MaxExp = GameConfig.GetExpForLevel(data.Level)
+	data.MaxHealth = GameConfig.GetMaxHealth(data.Level)
+
+	-- Heile Spieler vollständig
+	local character = player.Character
+	if character then
+		local humanoid = character:FindFirstChildOfClass("Humanoid")
+		if humanoid then
+			humanoid.MaxHealth = data.MaxHealth
+			humanoid.Health = data.MaxHealth
+		end
+	end
+
+	-- Schalte neue Waffe frei (wenn Level <= 9)
+	if data.Level <= 9 then
+		table.insert(data.UnlockedWeapons, data.Level)
+	end
+
+	-- Informiere Client
+	LevelUpRemote:FireClient(player, data.Level, data.UnlockedWeapons)
+
+	print("[PlayerManager] " .. player.Name .. " leveled up to " .. data.Level)
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- DEATH & RESPAWN
+-- ═══════════════════════════════════════════════════════════════
+
+function PlayerManager.OnPlayerDied(player)
+	local data = PlayerData[player]
+	if not data then return end
+
+	data.IsDead = true
+	data.CurrentHealth = 0
+
+	-- Informiere Client
+	PlayerDiedRemote:FireClient(player)
+
+	print("[PlayerManager] " .. player.Name .. " died!")
+
+	-- Respawn nach Wartezeit
+	task.delay(GameConfig.Timing.RespawnTime, function()
+		if player.Parent and PlayerData[player] then
+			player:LoadCharacter()
+			PlayerRespawnRemote:FireClient(player)
+		end
+	end)
+end
+
+function PlayerManager.DamagePlayer(player, damage)
+	local character = player.Character
+	if not character then return end
+
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	if not humanoid or humanoid.Health <= 0 then return end
+
+	humanoid:TakeDamage(damage)
+end
+
+function PlayerManager.HealPlayer(player, amount)
+	local data = PlayerData[player]
+	if not data then return end
+
+	local character = player.Character
+	if not character then return end
+
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	if not humanoid or humanoid.Health <= 0 then return end
+
+	humanoid.Health = math.min(humanoid.Health + amount, data.MaxHealth)
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- WAFFEN SYSTEM
+-- ═══════════════════════════════════════════════════════════════
+
+function PlayerManager.SelectWeapon(player, weaponSlot)
+	local data = PlayerData[player]
+	if not data then return false end
+
+	-- Prüfe ob Waffe freigeschaltet
+	local isUnlocked = false
+	for _, slot in pairs(data.UnlockedWeapons) do
+		if slot == weaponSlot then
+			isUnlocked = true
+			break
+		end
+	end
+
+	if not isUnlocked then
+		warn("[PlayerManager] Weapon slot " .. weaponSlot .. " is not unlocked for " .. player.Name)
+		return false
+	end
+
+	data.SelectedWeapon = weaponSlot
+	return true
+end
+
+function PlayerManager.GetSelectedWeapon(player)
+	local data = PlayerData[player]
+	if not data then return 1 end
+	return data.SelectedWeapon
+end
+
+function PlayerManager.GetUnlockedWeapons(player)
+	local data = PlayerData[player]
+	if not data then return {1} end
+	return data.UnlockedWeapons
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- DATA SYNC
+-- ═══════════════════════════════════════════════════════════════
+
+function PlayerManager.SyncPlayerData(player)
+	local data = PlayerData[player]
+	if not data then return end
+
+	PlayerDataRemote:FireClient(player, "FullSync", {
+		Level = data.Level,
+		CurrentExp = data.CurrentExp,
+		MaxExp = data.MaxExp,
+		MaxHealth = data.MaxHealth,
+		CurrentHealth = data.CurrentHealth,
+		SelectedWeapon = data.SelectedWeapon,
+		UnlockedWeapons = data.UnlockedWeapons,
+		CharacterModel = data.CharacterModel
+	})
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- UTILITY
+-- ═══════════════════════════════════════════════════════════════
+
+function PlayerManager.GetPlayerData(player)
+	return PlayerData[player]
+end
+
+function PlayerManager.GetAllPlayerData()
+	return PlayerData
+end
+
+function PlayerManager.GetPlayerCount()
+	return #Players:GetPlayers()
+end
+
+function PlayerManager.GetAlivePlayers()
+	local alivePlayers = {}
+	for player, data in pairs(PlayerData) do
+		if not data.IsDead and player.Character then
+			local humanoid = player.Character:FindFirstChildOfClass("Humanoid")
+			if humanoid and humanoid.Health > 0 then
+				table.insert(alivePlayers, player)
+			end
+		end
+	end
+	return alivePlayers
+end
+
+function PlayerManager.GetCharacterModel(player)
+	local data = PlayerData[player]
+	if not data then return nil end
+	return data.CharacterModel
+end
+
+function PlayerManager.AddKill(player)
+	local data = PlayerData[player]
+	if not data then return end
+	data.TotalKills = data.TotalKills + 1
+end
+
+function PlayerManager.AddDamageDealt(player, amount)
+	local data = PlayerData[player]
+	if not data then return end
+	data.TotalDamageDealt = data.TotalDamageDealt + amount
+end
+
+return PlayerManager

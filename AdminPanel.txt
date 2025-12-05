@@ -1,0 +1,429 @@
+-- AdminPanel.lua
+-- Platzierung: StarterPlayer/StarterPlayerScripts/AdminPanel (LocalScript)
+-- WICHTIG: Nur fuer Development! Vor Release entfernen oder deaktivieren!
+
+print("[AdminPanel] Loading Debug Panel...")
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+
+-- Modules
+local GameConfig = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("GameConfig"))
+
+-- Remotes
+local Remotes = ReplicatedStorage:WaitForChild("Remotes", 30)
+
+-- Admin Remote erstellen falls nicht vorhanden (wird vom Server erstellt)
+local AdminRemote = Remotes:WaitForChild("AdminCommand", 5)
+if not AdminRemote then
+	warn("[AdminPanel] AdminCommand Remote not found! Creating request...")
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- UI COLORS
+-- ═══════════════════════════════════════════════════════════════
+
+local COLORS = {
+	BACKGROUND = Color3.fromRGB(25, 25, 35),
+	PANEL = Color3.fromRGB(35, 35, 50),
+	BUTTON = Color3.fromRGB(60, 60, 80),
+	BUTTON_HOVER = Color3.fromRGB(80, 80, 110),
+	ACCENT = Color3.fromRGB(100, 150, 255),
+	SUCCESS = Color3.fromRGB(80, 200, 120),
+	WARNING = Color3.fromRGB(255, 180, 50),
+	ERROR = Color3.fromRGB(255, 80, 80),
+	TEXT = Color3.fromRGB(255, 255, 255),
+	TEXT_DIM = Color3.fromRGB(180, 180, 180)
+}
+
+-- ═══════════════════════════════════════════════════════════════
+-- UI ERSTELLEN
+-- ═══════════════════════════════════════════════════════════════
+
+local AdminGui = Instance.new("ScreenGui")
+AdminGui.Name = "AdminPanel"
+AdminGui.ResetOnSpawn = false
+AdminGui.DisplayOrder = 100
+AdminGui.Parent = playerGui
+
+-- Toggle Button (oben rechts)
+local ToggleButton = Instance.new("TextButton")
+ToggleButton.Name = "ToggleButton"
+ToggleButton.Size = UDim2.new(0, 50, 0, 50)
+ToggleButton.Position = UDim2.new(1, -60, 0, 10)
+ToggleButton.BackgroundColor3 = COLORS.ACCENT
+ToggleButton.Text = "DEV"
+ToggleButton.TextColor3 = COLORS.TEXT
+ToggleButton.TextScaled = true
+ToggleButton.Font = Enum.Font.GothamBold
+ToggleButton.Parent = AdminGui
+
+local ToggleCorner = Instance.new("UICorner")
+ToggleCorner.CornerRadius = UDim.new(0, 8)
+ToggleCorner.Parent = ToggleButton
+
+-- Main Panel
+local MainPanel = Instance.new("Frame")
+MainPanel.Name = "MainPanel"
+MainPanel.Size = UDim2.new(0, 350, 0, 500)
+MainPanel.Position = UDim2.new(1, -360, 0, 70)
+MainPanel.BackgroundColor3 = COLORS.BACKGROUND
+MainPanel.Visible = false
+MainPanel.Parent = AdminGui
+
+local PanelCorner = Instance.new("UICorner")
+PanelCorner.CornerRadius = UDim.new(0, 12)
+PanelCorner.Parent = MainPanel
+
+local PanelStroke = Instance.new("UIStroke")
+PanelStroke.Color = COLORS.ACCENT
+PanelStroke.Thickness = 2
+PanelStroke.Parent = MainPanel
+
+-- Header
+local Header = Instance.new("TextLabel")
+Header.Name = "Header"
+Header.Size = UDim2.new(1, 0, 0, 40)
+Header.BackgroundColor3 = COLORS.PANEL
+Header.Text = "ADMIN DEBUG PANEL"
+Header.TextColor3 = COLORS.ACCENT
+Header.TextScaled = true
+Header.Font = Enum.Font.GothamBold
+Header.Parent = MainPanel
+
+local HeaderCorner = Instance.new("UICorner")
+HeaderCorner.CornerRadius = UDim.new(0, 12)
+HeaderCorner.Parent = Header
+
+-- Scroll Frame fuer Content
+local ScrollFrame = Instance.new("ScrollingFrame")
+ScrollFrame.Name = "Content"
+ScrollFrame.Size = UDim2.new(1, -20, 1, -50)
+ScrollFrame.Position = UDim2.new(0, 10, 0, 45)
+ScrollFrame.BackgroundTransparency = 1
+ScrollFrame.ScrollBarThickness = 6
+ScrollFrame.ScrollBarImageColor3 = COLORS.ACCENT
+ScrollFrame.Parent = MainPanel
+
+local UIListLayout = Instance.new("UIListLayout")
+UIListLayout.Padding = UDim.new(0, 8)
+UIListLayout.Parent = ScrollFrame
+
+-- ═══════════════════════════════════════════════════════════════
+-- HELPER FUNCTIONS
+-- ═══════════════════════════════════════════════════════════════
+
+local function CreateSection(title)
+	local section = Instance.new("Frame")
+	section.Size = UDim2.new(1, 0, 0, 30)
+	section.BackgroundColor3 = COLORS.PANEL
+	section.Parent = ScrollFrame
+
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 6)
+	corner.Parent = section
+
+	local label = Instance.new("TextLabel")
+	label.Size = UDim2.new(1, -10, 1, 0)
+	label.Position = UDim2.new(0, 10, 0, 0)
+	label.BackgroundTransparency = 1
+	label.Text = title
+	label.TextColor3 = COLORS.ACCENT
+	label.TextScaled = true
+	label.Font = Enum.Font.GothamBold
+	label.TextXAlignment = Enum.TextXAlignment.Left
+	label.Parent = section
+
+	return section
+end
+
+local function CreateButton(text, color, callback)
+	local button = Instance.new("TextButton")
+	button.Size = UDim2.new(1, 0, 0, 35)
+	button.BackgroundColor3 = color or COLORS.BUTTON
+	button.Text = text
+	button.TextColor3 = COLORS.TEXT
+	button.TextScaled = true
+	button.Font = Enum.Font.GothamBold
+	button.Parent = ScrollFrame
+
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 6)
+	corner.Parent = button
+
+	button.MouseEnter:Connect(function()
+		TweenService:Create(button, TweenInfo.new(0.2), {BackgroundColor3 = COLORS.BUTTON_HOVER}):Play()
+	end)
+
+	button.MouseLeave:Connect(function()
+		TweenService:Create(button, TweenInfo.new(0.2), {BackgroundColor3 = color or COLORS.BUTTON}):Play()
+	end)
+
+	button.MouseButton1Click:Connect(function()
+		-- Flash Effect
+		button.BackgroundColor3 = COLORS.SUCCESS
+		task.delay(0.1, function()
+			button.BackgroundColor3 = color or COLORS.BUTTON
+		end)
+
+		if callback then
+			callback()
+		end
+	end)
+
+	return button
+end
+
+local function CreateButtonRow(buttons)
+	local row = Instance.new("Frame")
+	row.Size = UDim2.new(1, 0, 0, 35)
+	row.BackgroundTransparency = 1
+	row.Parent = ScrollFrame
+
+	local rowLayout = Instance.new("UIListLayout")
+	rowLayout.FillDirection = Enum.FillDirection.Horizontal
+	rowLayout.Padding = UDim.new(0, 5)
+	rowLayout.Parent = row
+
+	local buttonWidth = 1 / #buttons
+
+	for _, btnData in ipairs(buttons) do
+		local button = Instance.new("TextButton")
+		button.Size = UDim2.new(buttonWidth, -5, 1, 0)
+		button.BackgroundColor3 = btnData.color or COLORS.BUTTON
+		button.Text = btnData.text
+		button.TextColor3 = COLORS.TEXT
+		button.TextScaled = true
+		button.Font = Enum.Font.GothamBold
+		button.Parent = row
+
+		local corner = Instance.new("UICorner")
+		corner.CornerRadius = UDim.new(0, 6)
+		corner.Parent = button
+
+		button.MouseButton1Click:Connect(function()
+			button.BackgroundColor3 = COLORS.SUCCESS
+			task.delay(0.1, function()
+				button.BackgroundColor3 = btnData.color or COLORS.BUTTON
+			end)
+
+			if btnData.callback then
+				btnData.callback()
+			end
+		end)
+	end
+
+	return row
+end
+
+local function SendAdminCommand(command, ...)
+	if AdminRemote then
+		AdminRemote:FireServer(command, ...)
+	else
+		warn("[AdminPanel] AdminRemote not available!")
+	end
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- PANEL SECTIONS
+-- ═══════════════════════════════════════════════════════════════
+
+-- CHARACTER MORPH SECTION
+CreateSection("CHARACTER MORPH")
+
+CreateButtonRow({
+	{text = "TONI", color = COLORS.SUCCESS, callback = function()
+		SendAdminCommand("Morph", "Toni")
+	end},
+	{text = "DENIS", color = COLORS.ACCENT, callback = function()
+		SendAdminCommand("Morph", "Denis")
+	end}
+})
+
+-- LEVEL & EXP SECTION
+CreateSection("LEVEL & EXP")
+
+CreateButtonRow({
+	{text = "+100 EXP", callback = function()
+		SendAdminCommand("AddExp", 100)
+	end},
+	{text = "+500 EXP", callback = function()
+		SendAdminCommand("AddExp", 500)
+	end},
+	{text = "+1000 EXP", callback = function()
+		SendAdminCommand("AddExp", 1000)
+	end}
+})
+
+CreateButtonRow({
+	{text = "LVL 1", callback = function() SendAdminCommand("SetLevel", 1) end},
+	{text = "LVL 3", callback = function() SendAdminCommand("SetLevel", 3) end},
+	{text = "LVL 5", callback = function() SendAdminCommand("SetLevel", 5) end}
+})
+
+CreateButtonRow({
+	{text = "LVL 7", callback = function() SendAdminCommand("SetLevel", 7) end},
+	{text = "LVL 9", callback = function() SendAdminCommand("SetLevel", 9) end},
+	{text = "MAX", color = COLORS.WARNING, callback = function() SendAdminCommand("SetLevel", 9) end}
+})
+
+-- WEAPONS SECTION
+CreateSection("WEAPONS (Equip)")
+
+local weaponNames = {
+	[1] = "Pistole",
+	[2] = "Revolver",
+	[3] = "MAC-10",
+	[4] = "Shotgun",
+	[5] = "Minigun",
+	[6] = "Granate",
+	[7] = "Flammenwerfer",
+	[8] = "Sniper",
+	[9] = "Bazooka"
+}
+
+-- Waffen 1-3
+CreateButtonRow({
+	{text = "1: Pistole", callback = function() SendAdminCommand("EquipWeapon", 1) end},
+	{text = "2: Revolver", callback = function() SendAdminCommand("EquipWeapon", 2) end},
+	{text = "3: MAC-10", callback = function() SendAdminCommand("EquipWeapon", 3) end}
+})
+
+-- Waffen 4-6
+CreateButtonRow({
+	{text = "4: Shotgun", callback = function() SendAdminCommand("EquipWeapon", 4) end},
+	{text = "5: Minigun", callback = function() SendAdminCommand("EquipWeapon", 5) end},
+	{text = "6: Granate", callback = function() SendAdminCommand("EquipWeapon", 6) end}
+})
+
+-- Waffen 7-9
+CreateButtonRow({
+	{text = "7: Flammen", callback = function() SendAdminCommand("EquipWeapon", 7) end},
+	{text = "8: Sniper", callback = function() SendAdminCommand("EquipWeapon", 8) end},
+	{text = "9: Bazooka", callback = function() SendAdminCommand("EquipWeapon", 9) end}
+})
+
+-- GAME CONTROL SECTION
+CreateSection("GAME CONTROL")
+
+CreateButtonRow({
+	{text = "START GAME", color = COLORS.SUCCESS, callback = function()
+		SendAdminCommand("StartGame")
+	end},
+	{text = "STOP GAME", color = COLORS.ERROR, callback = function()
+		SendAdminCommand("StopGame")
+	end}
+})
+
+CreateButtonRow({
+	{text = "SKIP WAVE", color = COLORS.WARNING, callback = function()
+		SendAdminCommand("SkipWave")
+	end},
+	{text = "KILL ZOMBIES", color = COLORS.ERROR, callback = function()
+		SendAdminCommand("KillAllZombies")
+	end}
+})
+
+-- PLAYER SECTION
+CreateSection("PLAYER")
+
+CreateButtonRow({
+	{text = "HEAL", color = COLORS.SUCCESS, callback = function()
+		SendAdminCommand("Heal")
+	end},
+	{text = "GOD MODE", color = COLORS.WARNING, callback = function()
+		SendAdminCommand("GodMode")
+	end},
+	{text = "RESPAWN", callback = function()
+		SendAdminCommand("Respawn")
+	end}
+})
+
+CreateButton("TELEPORT TO SPAWN", COLORS.BUTTON, function()
+	SendAdminCommand("TeleportToSpawn")
+end)
+
+-- DEBUG INFO SECTION
+CreateSection("DEBUG INFO")
+
+local InfoLabel = Instance.new("TextLabel")
+InfoLabel.Name = "InfoLabel"
+InfoLabel.Size = UDim2.new(1, 0, 0, 80)
+InfoLabel.BackgroundColor3 = COLORS.PANEL
+InfoLabel.Text = "Press F8 to toggle panel\nLevel: - | EXP: -\nWeapon: - | Model: -"
+InfoLabel.TextColor3 = COLORS.TEXT_DIM
+InfoLabel.TextScaled = true
+InfoLabel.Font = Enum.Font.Gotham
+InfoLabel.TextWrapped = true
+InfoLabel.Parent = ScrollFrame
+
+local InfoCorner = Instance.new("UICorner")
+InfoCorner.CornerRadius = UDim.new(0, 6)
+InfoCorner.Parent = InfoLabel
+
+-- Update Canvas Size
+ScrollFrame.CanvasSize = UDim2.new(0, 0, 0, UIListLayout.AbsoluteContentSize.Y + 20)
+
+UIListLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+	ScrollFrame.CanvasSize = UDim2.new(0, 0, 0, UIListLayout.AbsoluteContentSize.Y + 20)
+end)
+
+-- ═══════════════════════════════════════════════════════════════
+-- TOGGLE PANEL
+-- ═══════════════════════════════════════════════════════════════
+
+local panelOpen = false
+
+local function TogglePanel()
+	panelOpen = not panelOpen
+	MainPanel.Visible = panelOpen
+
+	if panelOpen then
+		ToggleButton.BackgroundColor3 = COLORS.SUCCESS
+	else
+		ToggleButton.BackgroundColor3 = COLORS.ACCENT
+	end
+end
+
+ToggleButton.MouseButton1Click:Connect(TogglePanel)
+
+-- F8 Toggle
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+	if gameProcessed then return end
+
+	if input.KeyCode == Enum.KeyCode.F8 then
+		TogglePanel()
+	end
+end)
+
+-- ═══════════════════════════════════════════════════════════════
+-- INFO UPDATE LOOP
+-- ═══════════════════════════════════════════════════════════════
+
+task.spawn(function()
+	while true do
+		task.wait(0.5)
+
+		local character = player.Character
+		if character then
+			local modelName = character:GetAttribute("CharacterModel") or "Unknown"
+
+			-- Versuche PlayerData vom Server zu bekommen
+			local levelText = "?"
+			local expText = "?"
+			local weaponText = "?"
+
+			InfoLabel.Text = string.format(
+				"Press F8 to toggle panel\nModel: %s\nCheck Console for details",
+				modelName
+			)
+		end
+	end
+end)
+
+print("[AdminPanel] Debug Panel loaded! Press F8 or click DEV button to toggle.")

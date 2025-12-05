@@ -1,0 +1,226 @@
+-- ZombieAnimationController.lua
+-- Platzierung: ServerScriptService/Modules/ZombieAnimationController (ModuleScript)
+
+local ZombieAnimationController = {}
+
+-- Services
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+-- Modules
+local GameConfig = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("GameConfig"))
+
+-- Animation Cache
+local AnimationCache = {}
+
+-- ═══════════════════════════════════════════════════════════════
+-- INITIALISIERUNG
+-- ═══════════════════════════════════════════════════════════════
+
+function ZombieAnimationController.Initialize()
+	print("[ZombieAnimationController] Initializing...")
+
+	-- Pre-cache Animationen
+	for zombieType, config in pairs(GameConfig.Zombies) do
+		if config.Animations then
+			AnimationCache[zombieType] = {}
+
+			for animName, animId in pairs(config.Animations) do
+				if animId then
+					local animation = Instance.new("Animation")
+					animation.AnimationId = animId
+					animation.Name = animName
+					AnimationCache[zombieType][animName] = animation
+				end
+			end
+		end
+	end
+
+	print("[ZombieAnimationController] Initialization complete!")
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- ANIMATION SETUP
+-- ═══════════════════════════════════════════════════════════════
+
+function ZombieAnimationController.SetupZombie(zombie)
+	local zombieType = zombie:GetAttribute("ZombieType")
+	if not zombieType then
+		warn("[ZombieAnimationController] Zombie has no type attribute!")
+		return
+	end
+
+	local humanoid = zombie:FindFirstChildOfClass("Humanoid")
+	if not humanoid then
+		warn("[ZombieAnimationController] Zombie has no Humanoid!")
+		return
+	end
+
+	-- Erstelle Animator falls nicht vorhanden
+	local animator = humanoid:FindFirstChildOfClass("Animator")
+	if not animator then
+		animator = Instance.new("Animator")
+		animator.Parent = humanoid
+	end
+
+	-- Speichere Animation Tracks
+	local tracks = {}
+
+	-- Lade Walk Animation
+	local walkAnimData = AnimationCache[zombieType] and AnimationCache[zombieType].Walk
+	if walkAnimData then
+		local walkTrack = animator:LoadAnimation(walkAnimData)
+		walkTrack.Priority = Enum.AnimationPriority.Movement
+		walkTrack.Looped = true
+		tracks.Walk = walkTrack
+
+		-- Starte Walk Animation
+		walkTrack:Play()
+	end
+
+	-- Lade Melee Animation
+	local meleeAnimData = AnimationCache[zombieType] and AnimationCache[zombieType].Melee
+	if meleeAnimData then
+		local meleeTrack = animator:LoadAnimation(meleeAnimData)
+		meleeTrack.Priority = Enum.AnimationPriority.Action
+		meleeTrack.Looped = false
+		tracks.Melee = meleeTrack
+	end
+
+	-- Lade Range Animation (nur für Teufel)
+	local rangeAnimData = AnimationCache[zombieType] and AnimationCache[zombieType].Range
+	if rangeAnimData then
+		local rangeTrack = animator:LoadAnimation(rangeAnimData)
+		rangeTrack.Priority = Enum.AnimationPriority.Action
+		rangeTrack.Looped = false
+		tracks.Range = rangeTrack
+	end
+
+	-- Speichere Tracks auf dem Zombie
+	zombie:SetAttribute("AnimationsLoaded", true)
+
+	-- Speichere Referenzen
+	local tracksFolder = Instance.new("Folder")
+	tracksFolder.Name = "AnimationTracks"
+	tracksFolder.Parent = zombie
+
+	-- Speichere Track Referenzen als ObjectValues
+	for name, track in pairs(tracks) do
+		local trackRef = Instance.new("ObjectValue")
+		trackRef.Name = name
+		trackRef.Value = nil -- Kann nicht direkt gespeichert werden
+		trackRef.Parent = tracksFolder
+
+		-- Speichere als Attribut
+		zombie:SetAttribute("Anim_" .. name, true)
+	end
+
+	-- Speichere Animator Referenz
+	zombie:SetAttribute("AnimatorReady", true)
+
+	print("[ZombieAnimationController] Setup complete for: " .. zombieType)
+
+	return tracks
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- ANIMATION PLAYBACK
+-- ═══════════════════════════════════════════════════════════════
+
+function ZombieAnimationController.PlayAnimation(zombie, animationType)
+	local humanoid = zombie:FindFirstChildOfClass("Humanoid")
+	if not humanoid then return end
+
+	local animator = humanoid:FindFirstChildOfClass("Animator")
+	if not animator then return end
+
+	local zombieType = zombie:GetAttribute("ZombieType")
+	if not zombieType then return end
+
+	-- Hole Animation
+	local animData = AnimationCache[zombieType] and AnimationCache[zombieType][animationType]
+	if not animData then return end
+
+	-- Lade und spiele Animation
+	local track = animator:LoadAnimation(animData)
+	track.Priority = Enum.AnimationPriority.Action
+	track:Play()
+
+	return track
+end
+
+function ZombieAnimationController.StopAnimation(zombie, animationType)
+	local humanoid = zombie:FindFirstChildOfClass("Humanoid")
+	if not humanoid then return end
+
+	local animator = humanoid:FindFirstChildOfClass("Animator")
+	if not animator then return end
+
+	-- Stoppe alle passenden Tracks
+	for _, track in pairs(animator:GetPlayingAnimationTracks()) do
+		if track.Name == animationType then
+			track:Stop()
+		end
+	end
+end
+
+function ZombieAnimationController.PlayMeleeAttack(zombie)
+	return ZombieAnimationController.PlayAnimation(zombie, "Melee")
+end
+
+function ZombieAnimationController.PlayRangeAttack(zombie)
+	return ZombieAnimationController.PlayAnimation(zombie, "Range")
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- WALK ANIMATION CONTROL
+-- ═══════════════════════════════════════════════════════════════
+
+function ZombieAnimationController.StartWalking(zombie)
+	local humanoid = zombie:FindFirstChildOfClass("Humanoid")
+	if not humanoid then return end
+
+	local animator = humanoid:FindFirstChildOfClass("Animator")
+	if not animator then return end
+
+	local zombieType = zombie:GetAttribute("ZombieType")
+	if not zombieType then return end
+
+	local walkAnimData = AnimationCache[zombieType] and AnimationCache[zombieType].Walk
+	if not walkAnimData then return end
+
+	-- Prüfe ob bereits läuft
+	for _, track in pairs(animator:GetPlayingAnimationTracks()) do
+		if track.Animation and track.Animation.AnimationId == walkAnimData.AnimationId then
+			return -- Bereits am Laufen
+		end
+	end
+
+	local walkTrack = animator:LoadAnimation(walkAnimData)
+	walkTrack.Priority = Enum.AnimationPriority.Movement
+	walkTrack.Looped = true
+	walkTrack:Play()
+
+	return walkTrack
+end
+
+function ZombieAnimationController.StopWalking(zombie)
+	local humanoid = zombie:FindFirstChildOfClass("Humanoid")
+	if not humanoid then return end
+
+	local animator = humanoid:FindFirstChildOfClass("Animator")
+	if not animator then return end
+
+	local zombieType = zombie:GetAttribute("ZombieType")
+	if not zombieType then return end
+
+	local walkAnimData = AnimationCache[zombieType] and AnimationCache[zombieType].Walk
+	if not walkAnimData then return end
+
+	for _, track in pairs(animator:GetPlayingAnimationTracks()) do
+		if track.Animation and track.Animation.AnimationId == walkAnimData.AnimationId then
+			track:Stop(0.3)
+		end
+	end
+end
+
+return ZombieAnimationController

@@ -1,0 +1,452 @@
+-- GameConfig.lua
+-- Platzierung: ReplicatedStorage/Modules/GameConfig (ModuleScript)
+
+local GameConfig = {}
+
+-- ═══════════════════════════════════════════════════════════════
+-- ZOMBIE KONFIGURATION
+-- ═══════════════════════════════════════════════════════════════
+
+GameConfig.Zombies = {
+	["DuennerZombie"] = {
+		Health = 12,
+		Damage = 10,
+		SpeedMultiplier = 0.9,
+		AttackRange = 5,
+		AttackCooldown = 1.5,
+		ExpReward = 10,
+		Animations = {
+			Walk = "rbxassetid://99142028605393",
+			Melee = "rbxassetid://105535048772922"
+		}
+	},
+	["DickerZombie"] = {
+		Health = 16,
+		Damage = 10,
+		SpeedMultiplier = 0.8,
+		AttackRange = 5,
+		AttackCooldown = 1.8,
+		ExpReward = 15,
+		Animations = {
+			Walk = "rbxassetid://101859455615288",
+			Melee = "rbxassetid://108685157367958"
+		}
+	},
+	["Skelett"] = {
+		Health = 14,
+		Damage = 20,
+		SpeedMultiplier = 1.5,
+		AttackRange = 5,
+		AttackCooldown = 1.2,
+		ExpReward = 20,
+		Animations = {
+			Walk = "rbxassetid://119448072187227",
+			Melee = nil -- Keine Melee Animation angegeben
+		}
+	},
+	["Knochengolem"] = {
+		Health = 20,
+		Damage = 15,
+		SpeedMultiplier = 0.9,
+		AttackRange = 6,
+		AttackCooldown = 2.0,
+		ExpReward = 30,
+		Animations = {
+			Walk = "rbxassetid://99068819463084",
+			Melee = "rbxassetid://84562803742854"
+		}
+	},
+	["Teufel"] = {
+		Health = 60,
+		Damage = 20,
+		SpeedMultiplier = 0.8,
+		AttackRange = 25, -- Ranged Angriff
+		AttackCooldown = 3.0,
+		ExpReward = 100,
+		IsRanged = true,
+		ProjectileSpeed = 40,
+		ProjectileDelay = 1.0, -- 1sec nach Animation-Start
+		Animations = {
+			Walk = "rbxassetid://94995218262514",
+			Range = "rbxassetid://126784198207792"
+		}
+	}
+}
+
+-- ═══════════════════════════════════════════════════════════════
+-- WELLEN KONFIGURATION
+-- ═══════════════════════════════════════════════════════════════
+
+-- Wellen 1-10 sind definiert, ab Welle 11 wird automatisch berechnet
+GameConfig.Waves = {
+	[1] = { DuennerZombie = 3, DickerZombie = 1, Skelett = 0, Knochengolem = 0, Teufel = 0 },
+	[2] = { DuennerZombie = 5, DickerZombie = 2, Skelett = 0, Knochengolem = 0, Teufel = 0 },
+	[3] = { DuennerZombie = 6, DickerZombie = 3, Skelett = 1, Knochengolem = 0, Teufel = 0 },
+	[4] = { DuennerZombie = 6, DickerZombie = 4, Skelett = 2, Knochengolem = 0, Teufel = 0 },
+	[5] = { DuennerZombie = 7, DickerZombie = 4, Skelett = 2, Knochengolem = 1, Teufel = 0 },
+	[6] = { DuennerZombie = 7, DickerZombie = 4, Skelett = 3, Knochengolem = 2, Teufel = 0 },
+	[7] = { DuennerZombie = 8, DickerZombie = 6, Skelett = 3, Knochengolem = 3, Teufel = 0 },
+	[8] = { DuennerZombie = 10, DickerZombie = 5, Skelett = 3, Knochengolem = 3, Teufel = 1 },
+	[9] = { DuennerZombie = 11, DickerZombie = 6, Skelett = 4, Knochengolem = 3, Teufel = 1 },
+	[10] = { DuennerZombie = 12, DickerZombie = 6, Skelett = 4, Knochengolem = 4, Teufel = 2 }
+}
+
+-- Basis für Welle 11+
+GameConfig.Wave10Base = { DuennerZombie = 12, DickerZombie = 6, Skelett = 4, Knochengolem = 4, Teufel = 2 }
+
+-- Funktion um Wellen-Daten zu bekommen (inkl. Welle 11+)
+function GameConfig.GetWaveData(waveNumber, playerCount)
+	local baseWave
+
+	if waveNumber <= 10 then
+		baseWave = GameConfig.Waves[waveNumber]
+	else
+		-- Ab Welle 11: +1 pro Zombie-Typ pro Welle ueber 10
+		local extraPerType = waveNumber - 10
+		baseWave = {
+			DuennerZombie = GameConfig.Wave10Base.DuennerZombie + extraPerType,
+			DickerZombie = GameConfig.Wave10Base.DickerZombie + extraPerType,
+			Skelett = GameConfig.Wave10Base.Skelett + extraPerType,
+			Knochengolem = GameConfig.Wave10Base.Knochengolem + extraPerType,
+			Teufel = GameConfig.Wave10Base.Teufel + extraPerType
+		}
+	end
+
+	-- Multipliziere mit Spieleranzahl
+	local scaledWave = {}
+	for zombieType, count in pairs(baseWave) do
+		scaledWave[zombieType] = count * playerCount
+	end
+
+	return scaledWave
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- SPIELER KONFIGURATION
+-- ═══════════════════════════════════════════════════════════════
+
+GameConfig.Player = {
+	BaseWalkSpeed = 16,
+	BaseHealth = 100,
+	HealthPerLevel = 50,
+	Models = {"Toni", "Denis"} -- Zufällige Auswahl
+}
+
+-- ═══════════════════════════════════════════════════════════════
+-- EXP & LEVEL SYSTEM
+-- ═══════════════════════════════════════════════════════════════
+
+GameConfig.ExpRequired = {
+	[1] = 60,
+	[2] = 100,
+	[3] = 140,
+	[4] = 200,
+	[5] = 260,
+	[6] = 320,
+	[7] = 400,
+	[8] = 500,
+	[9] = 600,
+	[10] = 600 -- Ab Level 10 immer 600
+}
+
+function GameConfig.GetExpForLevel(level)
+	if level <= 9 then
+		return GameConfig.ExpRequired[level] or 600
+	else
+		return 600
+	end
+end
+
+function GameConfig.GetMaxHealth(level)
+	return GameConfig.Player.BaseHealth + (level - 1) * GameConfig.Player.HealthPerLevel
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- WAFFEN KONFIGURATION
+-- ═══════════════════════════════════════════════════════════════
+
+GameConfig.Weapons = {
+	[1] = {
+		Name = "Pistole",
+		Folder = "LVL1",
+		Damage = 6,
+		FireRate = 0.4, -- Sekunden zwischen Schüssen
+		Range = 100,
+		AmmoPerMag = 12,
+		ReloadTime = 1.5,
+		Spread = 2, -- Grad
+		Automatic = false,
+		AnimationType = "Pistol"
+	},
+	[2] = {
+		Name = "Revolver",
+		Folder = "LVL2",
+		Damage = 15,
+		FireRate = 0.7,
+		Range = 120,
+		AmmoPerMag = 6,
+		ReloadTime = 2.0,
+		Spread = 1,
+		Automatic = false,
+		AnimationType = "Pistol"
+	},
+	[3] = {
+		Name = "MAC-10",
+		Folder = "LVL3",
+		Damage = 5,
+		FireRate = 0.08,
+		Range = 60,
+		AmmoPerMag = 30,
+		ReloadTime = 1.8,
+		Spread = 5,
+		Automatic = true,
+		AnimationType = "Pistol"
+	},
+	[4] = {
+		Name = "Shotgun",
+		Folder = "LVL4",
+		Damage = 8, -- Pro Pellet
+		Pellets = 8,
+		FireRate = 0.9,
+		Range = 40,
+		AmmoPerMag = 8,
+		ReloadTime = 2.5,
+		Spread = 12,
+		Automatic = false,
+		AnimationType = "Gewehr"
+	},
+	[5] = {
+		Name = "Sturmgewehr",
+		Folder = "LVL5",
+		Damage = 10,
+		FireRate = 0.12,
+		Range = 150,
+		AmmoPerMag = 30,
+		ReloadTime = 2.0,
+		Spread = 3,
+		Automatic = true,
+		AnimationType = "Gewehr"
+	},
+	[6] = {
+		Name = "Granate",
+		Folder = "LVL6",
+		Damage = 80,
+		ExplosionRadius = 15,
+		ThrowForce = 80,
+		CooldownTime = 5.0,
+		Automatic = false,
+		AnimationType = "Granate"
+	},
+	[7] = {
+		Name = "Flammenwerfer",
+		Folder = "LVL7",
+		DamagePerSecond = 25,
+		Range = 25,
+		FuelMax = 100,
+		FuelPerSecond = 10,
+		ReloadTime = 3.0,
+		Automatic = true,
+		AnimationType = "Gewehr"
+	},
+	[8] = {
+		Name = "Minigun",
+		Folder = "LVL8",
+		Damage = 8,
+		FireRate = 0.05,
+		Range = 100,
+		AmmoPerMag = 200,
+		ReloadTime = 4.0,
+		Spread = 4,
+		SpinUpTime = 0.8,
+		Automatic = true,
+		AnimationType = "Minigun"
+	},
+	[9] = {
+		Name = "Bazooka",
+		Folder = "LVL9",
+		Damage = 150,
+		ExplosionRadius = 20,
+		ProjectileSpeed = 60,
+		AmmoPerMag = 1,
+		ReloadTime = 3.0,
+		Automatic = false,
+		AnimationType = "Bazooka"
+	}
+}
+
+-- ═══════════════════════════════════════════════════════════════
+-- WAFFEN OFFSETS (Position auf der Hand)
+-- Nutze das WeaponPositioner Tool (F9) um diese Werte anzupassen!
+-- Die Werte werden im Output ausgegeben wenn du P drückst
+-- ═══════════════════════════════════════════════════════════════
+
+-- Waffen Offsets pro Charakter
+-- [CharacterName] = { [WeaponSlot] = CFrame }
+GameConfig.WeaponOffsets = {
+	Denis = {
+		[1] = CFrame.new(0.750, 1.150, -2.450) * CFrame.Angles(math.rad(-0.0), math.rad(-170.0), math.rad(-0.0)), -- Pistole
+		[2] = CFrame.new(0.800, 1.200, -2.000) * CFrame.Angles(math.rad(5.0), math.rad(0.0), math.rad(0.0)), -- Revolver
+		[3] = CFrame.new(0.850, 1.300, -2.250) * CFrame.Angles(math.rad(10.0), math.rad(-85.0), math.rad(10.0)), -- MAC-10
+		[4] = CFrame.new(1.200, 0.150, -0.400) * CFrame.Angles(math.rad(-0.0), math.rad(-177.0), math.rad(0.0)), -- Shotgun
+		[5] = CFrame.new(1.100, 0.300, -1.600) * CFrame.Angles(math.rad(-0.0), math.rad(0.0), math.rad(-0.0)), -- Sturmgewehr
+		[6] = CFrame.new(1.600, 0.100, -1.450) * CFrame.Angles(math.rad(-135.0), math.rad(-5.0), math.rad(-0.0)), -- Granate
+		[7] = CFrame.new(1.050, 0.100, -2.150) * CFrame.Angles(math.rad(-0.0), math.rad(5.0), math.rad(-0.0)), -- Flammenwerfer
+		[8] = CFrame.new(0.500, -0.050, -1.100) * CFrame.Angles(math.rad(-0.0), math.rad(-85.0), math.rad(0.0)), -- Minigun
+		[9] = CFrame.new(0.700, 1.800, -5.350) * CFrame.Angles(math.rad(-5.0), math.rad(0.0), math.rad(0.0)), -- Bazooka
+	},
+	Toni = {
+		[1] = CFrame.new(0.650, 0.700, -2.100) * CFrame.Angles(math.rad(-0.0), math.rad(-180.0), math.rad(-0.0)), -- Pistole
+		[2] = CFrame.new(0.600, 0.650, -1.600) * CFrame.Angles(math.rad(-0.0), math.rad(-0.0), math.rad(-0.0)), -- Revolver
+		[3] = CFrame.new(0.650, 0.850, -2.050) * CFrame.Angles(math.rad(-0.0), math.rad(-85.0), math.rad(-0.0)), -- MAC-10
+		[4] = CFrame.new(0.600, -0.150, 0.200) * CFrame.Angles(math.rad(5.0), math.rad(-180.0), math.rad(0.0)), -- Shotgun
+		[5] = CFrame.new(0.700, 0.300, -1.700) * CFrame.Angles(math.rad(-0.0), math.rad(-0.0), math.rad(-0.0)), -- Sturmgewehr
+		[6] = CFrame.new(0.950, 0.200, -1.450) * CFrame.Angles(math.rad(-115.0), math.rad(10.0), math.rad(15.0)), -- Granate
+		[7] = CFrame.new(0.650, -0.000, -1.900) * CFrame.Angles(math.rad(-0.0), math.rad(0.0), math.rad(-0.0)), -- Flammenwerfer
+		[8] = CFrame.new(0.100, -0.250, -2.300) * CFrame.Angles(math.rad(-0.0), math.rad(-90.0), math.rad(-0.0)), -- Minigun
+		[9] = CFrame.new(0.650, 1.700, -5.300) * CFrame.Angles(math.rad(-0.0), math.rad(0.0), math.rad(-0.0)), -- Bazooka
+	}
+}
+
+-- Waffen Scales pro Charakter
+-- [CharacterName] = { [WeaponSlot] = Scale }
+GameConfig.WeaponScales = {
+	Denis = {
+		[1] = 1.00, -- Pistole
+		[2] = 0.70, -- Revolver
+		[3] = 1.40, -- MAC-10
+		[4] = 1.00, -- Shotgun
+		[5] = 1.00, -- Sturmgewehr
+		[6] = 0.40, -- Granate
+		[7] = 1.70, -- Flammenwerfer
+		[8] = 1.90, -- Minigun
+		[9] = 2.20, -- Bazooka
+	},
+	Toni = {
+		[1] = 0.90, -- Pistole
+		[2] = 0.80, -- Revolver
+		[3] = 1.50, -- MAC-10
+		[4] = 1.20, -- Shotgun
+		[5] = 1.20, -- Sturmgewehr
+		[6] = 0.50, -- Granate
+		[7] = 1.60, -- Flammenwerfer
+		[8] = 2.00, -- Minigun
+		[9] = 2.10, -- Bazooka
+	}
+}
+
+-- ═══════════════════════════════════════════════════════════════
+-- ANIMATIONEN PRO CHARAKTER
+-- ═══════════════════════════════════════════════════════════════
+
+GameConfig.CharacterAnimations = {
+	Denis = {
+		Pistol = {
+			Idle = "rbxassetid://98764799116466",
+			Walk = "rbxassetid://89980468070487"
+		},
+		Gewehr = {
+			Idle = "rbxassetid://105417724443290",
+			Walk = "rbxassetid://120385962385829"
+		},
+		Granate = {
+			Idle = "rbxassetid://81418686626548",
+			Walk = "rbxassetid://77795896556619"
+		},
+		Minigun = {
+			Idle = "rbxassetid://107813906877388",
+			Walk = "rbxassetid://78551892757867"
+		},
+		Bazooka = {
+			Idle = "rbxassetid://97987733960932",
+			Walk = "rbxassetid://99367879957990"
+		}
+	},
+	Toni = { -- Antonio
+		Pistol = {
+			Idle = "rbxassetid://124395454032993",
+			Walk = "rbxassetid://90826815821622"
+		},
+		Gewehr = {
+			Idle = "rbxassetid://130833602015927",
+			Walk = "rbxassetid://78665266011159"
+		},
+		Granate = {
+			Idle = "rbxassetid://87986395837286",
+			Walk = "rbxassetid://98818214299734"
+		},
+		Minigun = {
+			Idle = "rbxassetid://124379942504214",
+			Walk = "rbxassetid://74120165669148"
+		},
+		Bazooka = {
+			Idle = "rbxassetid://123698731409408",
+			Walk = "rbxassetid://101004242548991"
+		}
+	}
+}
+
+-- ═══════════════════════════════════════════════════════════════
+-- ZAUN KONFIGURATION
+-- ═══════════════════════════════════════════════════════════════
+
+GameConfig.Fence = {
+	BuildTime = 3.0, -- Sekunden zum Bauen
+	StandTime = 3.0, -- Sekunden auf Bauplatz stehen
+	Health = 100,
+	-- Zaun-Gruppen (Flaechen)
+	Groups = {
+		Flaeche1 = {
+			Zaun1 = { Bauplaetze = {"Bauplatz1"} },
+			Zaun2 = { Bauplaetze = {"Bauplatz1"} },
+			Zaun3 = { Bauplaetze = {"Bauplatz1", "Bauplatz2"} }
+		},
+		Flaeche2 = {
+			Zaun4 = { Bauplaetze = {"Bauplatz1"} },
+			Zaun5 = { Bauplaetze = {"Bauplatz1", "Bauplatz2"} },
+			Zaun6 = { Bauplaetze = {"Bauplatz1"} }
+		},
+		Flaeche3 = {
+			Zaun7 = { Bauplaetze = {"Bauplatz1"} },
+			Zaun8 = { Bauplaetze = {"Bauplatz1", "Bauplatz2"} },
+			Zaun9 = { Bauplaetze = {"Bauplatz1"} }
+		},
+		Flaeche4 = {
+			Zaun10 = { Bauplaetze = {"Bauplatz1"} },
+			Zaun11 = { Bauplaetze = {"Bauplatz1", "Bauplatz2"} },
+			Zaun12 = { Bauplaetze = {"Bauplatz1"} }
+		}
+	}
+}
+
+-- ═══════════════════════════════════════════════════════════════
+-- SPAWN PUNKTE
+-- ═══════════════════════════════════════════════════════════════
+
+GameConfig.SpawnPoints = {
+	Folder = "Workspace/EnemySpawns",
+	Names = {"Spawn1", "Spawn2", "Spawn3", "Spawn4", "Spawn5", "Spawn6", "Spawn7", "Spawn8"}
+}
+
+-- ═══════════════════════════════════════════════════════════════
+-- TIMING KONFIGURATION
+-- ═══════════════════════════════════════════════════════════════
+
+GameConfig.Timing = {
+	WaveStartDelay = 5.0, -- Sekunden vor erster Welle
+	WaveEndDelay = 5.0, -- Sekunden zwischen Wellen
+	SpawnInterval = 0.5, -- Sekunden zwischen Zombie-Spawns
+	RespawnTime = 5.0 -- Sekunden bis Spieler respawnt
+}
+
+-- ═══════════════════════════════════════════════════════════════
+-- ASSET PFADE
+-- ═══════════════════════════════════════════════════════════════
+
+GameConfig.AssetPaths = {
+	Zombies = "ReplicatedStorage/Assets/Zombies",
+	Guns = "ReplicatedStorage/Assets/Guns",
+	PlayerModels = "ReplicatedStorage/Assets/PlayerModel",
+	Fence = "ReplicatedStorage/Assets/Zaun"
+}
+
+return GameConfig

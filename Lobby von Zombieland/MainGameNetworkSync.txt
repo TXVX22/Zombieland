@@ -1,0 +1,324 @@
+-- MainGameNetworkSync (FIXED VERSION)
+-- Platzierung: ServerScriptService/MainGameNetworkSync
+-- ========================================
+
+print("[MAIN GAME NETWORK SYNC] Starting enhanced synchronization system...")
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+-- Create sync folder if not exists
+local syncFolder = ReplicatedStorage:FindFirstChild("SyncData") or Instance.new("Folder")
+syncFolder.Name = "SyncData"
+syncFolder.Parent = ReplicatedStorage
+
+-- Create RemoteEvents for synchronization
+local positionSync = syncFolder:FindFirstChild("PositionSync") or Instance.new("RemoteEvent")
+positionSync.Name = "PositionSync"
+positionSync.Parent = syncFolder
+
+local ownershipSync = syncFolder:FindFirstChild("OwnershipSync") or Instance.new("RemoteEvent")
+ownershipSync.Name = "OwnershipSync"
+ownershipSync.Parent = syncFolder
+
+-- Track player connections
+local playerConnections = {}
+local playerSeatConnections = {}  -- Separate table for seat connections
+local lastPositions = {}
+local morphedPlayers = {}
+
+-- ===== HELPER FUNCTION TO CHECK IF PLAYER IS SITTING =====
+local function isPlayerSitting(character)
+	local humanoid = character:FindFirstChild("Humanoid")
+	if humanoid then
+		return humanoid.Sit or humanoid.SeatPart ~= nil
+	end
+	return false
+end
+
+-- ===== NETWORK OWNERSHIP MANAGER =====
+
+local function setProperNetworkOwnership(character, player)
+	-- IMPORTANT: Skip if player is sitting
+	if isPlayerSitting(character) then
+		print("[NETWORK SYNC] Skipping ownership for", player.Name, "- player is sitting")
+		return
+	end
+
+	-- Set network ownership for all parts
+	for _, part in ipairs(character:GetDescendants()) do
+		if part:IsA("BasePart") and not part.Anchored then
+			-- Skip seats and parts connected to seats
+			local isSeatPart = part:IsA("Seat") or part:IsA("VehicleSeat")
+			if isSeatPart then
+				continue
+			end
+
+			-- Set custom physics for better sync
+			if part.Name ~= "HumanoidRootPart" then
+				part.CustomPhysicalProperties = PhysicalProperties.new(
+					0.5, -- Lower density for smoother movement
+					0.5, -- Friction
+					0.1, -- Low elasticity
+					1,   -- ElasticityWeight
+					1    -- FrictionWeight
+				)
+			end
+
+			local success, errorMsg = pcall(function()
+				part:SetNetworkOwner(player)
+			end)
+
+			if not success then
+				-- Log error but don't crash
+				if errorMsg and not errorMsg:find("Seat") then
+					warn("[NETWORK SYNC] Failed to set ownership for part:", part.Name, "Error:", errorMsg)
+				end
+			end
+		end
+	end
+
+	print("[NETWORK SYNC] Set network ownership for", player.Name)
+end
+
+local function resetNetworkOwnership(character)
+	-- Skip if player is sitting
+	if isPlayerSitting(character) then
+		return
+	end
+
+	-- Reset to automatic ownership
+	for _, part in ipairs(character:GetDescendants()) do
+		if part:IsA("BasePart") and not part.Anchored then
+			pcall(function()
+				part:SetNetworkOwnershipAuto()
+			end)
+		end
+	end
+end
+
+-- ===== POSITION REPLICATION SYSTEM =====
+
+local function startPositionReplication(player)
+	-- Clean up old connection
+	if playerConnections[player] then
+		playerConnections[player]:Disconnect()
+		playerConnections[player] = nil
+	end
+
+	-- Create heartbeat connection for position updates
+	playerConnections[player] = RunService.Heartbeat:Connect(function()
+		local character = player.Character
+		if not character then
+			if playerConnections[player] then
+				playerConnections[player]:Disconnect()
+				playerConnections[player] = nil
+			end
+			return
+		end
+
+		local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
+		if not humanoidRootPart then return end
+
+		-- Skip if sitting
+		if isPlayerSitting(character) then
+			return
+		end
+
+		-- Check if position changed significantly
+		local currentPos = humanoidRootPart.Position
+		local lastPos = lastPositions[player]
+
+		if not lastPos or (currentPos - lastPos).Magnitude > 0.1 then
+			lastPositions[player] = currentPos
+
+			-- Broadcast position to other clients (for smooth interpolation)
+			for _, otherPlayer in ipairs(Players:GetPlayers()) do
+				if otherPlayer ~= player then
+					positionSync:FireClient(otherPlayer, player, currentPos, humanoidRootPart.CFrame.LookVector)
+				end
+			end
+		end
+
+		-- Ensure ownership remains with player (ONLY if not sitting)
+		if not isPlayerSitting(character) then
+			local currentOwner = humanoidRootPart:GetNetworkOwner()
+			if currentOwner ~= player then
+				pcall(function()
+					humanoidRootPart:SetNetworkOwner(player)
+				end)
+			end
+		end
+	end)
+end
+
+-- ===== MORPH SYNC ENHANCEMENT =====
+
+local function enhanceMorphSync(player, isMorphed)
+	morphedPlayers[player] = isMorphed
+
+	if isMorphed then
+		-- When morphed, ensure extra sync
+		local character = player.Character
+		if character then
+			-- Skip if sitting
+			if isPlayerSitting(character) then
+				return
+			end
+
+			-- Force update physics
+			local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
+			if humanoidRootPart then
+				-- Set better physics for morphed characters
+				for _, part in ipairs(character:GetDescendants()) do
+					if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then
+						part.CustomPhysicalProperties = PhysicalProperties.new(
+							0.5, -- Lower density for smooth morph movement
+							0.5, -- Friction
+							0.1, -- Low elasticity
+							1,   -- ElasticityWeight
+							1    -- FrictionWeight
+						)
+					end
+				end
+			end
+		end
+	end
+end
+
+-- ===== PLAYER EVENTS =====
+
+Players.PlayerAdded:Connect(function(player)
+	print("[NETWORK SYNC] Player joined:", player.Name)
+
+	player.CharacterAdded:Connect(function(character)
+		-- Wait for character to load
+		local humanoid = character:WaitForChild("Humanoid", 10)
+		local humanoidRootPart = character:WaitForChild("HumanoidRootPart", 10)
+
+		if humanoid and humanoidRootPart then
+			-- Monitor sitting state
+			local seatConnection = humanoid:GetPropertyChangedSignal("Sit"):Connect(function()
+				if humanoid.Sit then
+					print("[NETWORK SYNC] Player", player.Name, "is sitting - pausing sync")
+					-- Don't change ownership while sitting
+				else
+					print("[NETWORK SYNC] Player", player.Name, "stood up - resuming sync")
+					-- Resume ownership when standing
+					wait(0.1) -- Small delay
+					setProperNetworkOwnership(character, player)
+				end
+			end)
+
+			-- Store seat connection separately
+			playerSeatConnections[player] = seatConnection
+
+			-- Set up network ownership (only if not sitting)
+			wait(0.5) -- Small delay to ensure character is fully loaded
+			if not isPlayerSitting(character) then
+				setProperNetworkOwnership(character, player)
+			end
+
+			-- Start position replication
+			startPositionReplication(player)
+
+			-- Notify other clients
+			ownershipSync:FireAllClients(player, true)
+
+			print("[NETWORK SYNC] Character setup complete for", player.Name)
+		end
+	end)
+
+	player.CharacterRemoving:Connect(function()
+		-- Clean up position connection
+		if playerConnections[player] then
+			playerConnections[player]:Disconnect()
+			playerConnections[player] = nil
+		end
+
+		-- Clean up seat connection
+		if playerSeatConnections[player] then
+			playerSeatConnections[player]:Disconnect()
+			playerSeatConnections[player] = nil
+		end
+
+		lastPositions[player] = nil
+		morphedPlayers[player] = nil
+
+		-- Notify other clients
+		ownershipSync:FireAllClients(player, false)
+	end)
+end)
+
+Players.PlayerRemoving:Connect(function(player)
+	-- Final cleanup
+	if playerConnections[player] then
+		playerConnections[player]:Disconnect()
+		playerConnections[player] = nil
+	end
+
+	if playerSeatConnections[player] then
+		playerSeatConnections[player]:Disconnect()
+		playerSeatConnections[player] = nil
+	end
+
+	lastPositions[player] = nil
+	morphedPlayers[player] = nil
+
+	print("[NETWORK SYNC] Player left:", player.Name)
+end)
+
+-- ===== GLOBAL FUNCTIONS FOR INTEGRATION =====
+
+_G.NetworkSyncEnhanceMorph = function(player)
+	if player.Character and not isPlayerSitting(player.Character) then
+		enhanceMorphSync(player, true)
+	end
+end
+
+_G.NetworkSyncResetMorph = function(player)
+	if player.Character and not isPlayerSitting(player.Character) then
+		enhanceMorphSync(player, false)
+	end
+end
+
+_G.NetworkSyncRefresh = function(player)
+	local character = player.Character
+	if character and not isPlayerSitting(character) then
+		setProperNetworkOwnership(character, player)
+		startPositionReplication(player)
+	end
+end
+
+-- ===== PERIODIC SYNC CHECK =====
+
+spawn(function()
+	while true do
+		wait(5) -- Check every 5 seconds
+
+		for _, player in ipairs(Players:GetPlayers()) do
+			local character = player.Character
+			if character then
+				-- Skip if player is sitting
+				if isPlayerSitting(character) then
+					continue
+				end
+
+				local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
+				if humanoidRootPart then
+					-- Check ownership
+					local owner = humanoidRootPart:GetNetworkOwner()
+					if owner ~= player then
+						print("[NETWORK SYNC] Fixing ownership for", player.Name)
+						pcall(function()
+							humanoidRootPart:SetNetworkOwner(player)
+						end)
+					end
+				end
+			end
+		end
+	end
+end)
+
+print("[NETWORK SYNC] System loaded successfully with sitting protection!")

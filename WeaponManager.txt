@@ -1,0 +1,752 @@
+-- WeaponManager.lua
+-- Platzierung: ServerScriptService/Modules/WeaponManager (ModuleScript)
+
+local WeaponManager = {}
+
+-- Services
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Debris = game:GetService("Debris")
+
+-- Modules
+local GameConfig = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("GameConfig"))
+
+-- Remotes (warten auf MainGameServer die diese erstellt)
+local Remotes = ReplicatedStorage:WaitForChild("Remotes", 30)
+local WeaponFireRemote = Remotes:WaitForChild("WeaponFire", 10)
+local WeaponReloadRemote = Remotes:WaitForChild("WeaponReload", 10)
+local WeaponEquipRemote = Remotes:WaitForChild("WeaponEquip", 10)
+local WeaponHitRemote = Remotes:WaitForChild("WeaponHit", 10)
+
+-- Assets
+local GunsFolder = ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Guns")
+
+-- Player Weapon States
+local WeaponStates = {}
+
+-- References
+local ZombieManager = nil
+local PlayerManager = nil
+
+-- ═══════════════════════════════════════════════════════════════
+-- WEAPON STATE STRUKTUR
+-- ═══════════════════════════════════════════════════════════════
+
+local function CreateWeaponState(player, weaponSlot)
+	local weaponConfig = GameConfig.Weapons[weaponSlot]
+	if not weaponConfig then return nil end
+
+	return {
+		Player = player,
+		WeaponSlot = weaponSlot,
+		Config = weaponConfig,
+		CurrentAmmo = weaponConfig.AmmoPerMag or 1,
+		MaxAmmo = weaponConfig.AmmoPerMag or 1,
+		IsReloading = false,
+		LastFireTime = 0,
+		IsFiring = false,
+		-- Spezielle Waffen
+		Fuel = weaponConfig.FuelMax or 0, -- Flammenwerfer
+		IsSpinningUp = false, -- Minigun
+		SpinUpStartTime = 0
+	}
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- INITIALISIERUNG
+-- ═══════════════════════════════════════════════════════════════
+
+function WeaponManager.Initialize(zombieManagerRef, playerManagerRef)
+	ZombieManager = zombieManagerRef
+	PlayerManager = playerManagerRef
+
+	print("[WeaponManager] Initializing...")
+
+	-- Client Remote Handlers
+	WeaponFireRemote.OnServerEvent:Connect(function(player, targetPosition, isFiring)
+		WeaponManager.HandleFire(player, targetPosition, isFiring)
+	end)
+
+	WeaponReloadRemote.OnServerEvent:Connect(function(player)
+		WeaponManager.HandleReload(player)
+	end)
+
+	WeaponEquipRemote.OnServerEvent:Connect(function(player, weaponSlot)
+		WeaponManager.EquipWeapon(player, weaponSlot)
+	end)
+
+	-- Player Join/Leave
+	Players.PlayerAdded:Connect(function(player)
+		WeaponManager.OnPlayerJoined(player)
+	end)
+
+	Players.PlayerRemoving:Connect(function(player)
+		WeaponStates[player] = nil
+	end)
+
+	-- Bereits verbundene Spieler
+	for _, player in pairs(Players:GetPlayers()) do
+		WeaponManager.OnPlayerJoined(player)
+	end
+
+	print("[WeaponManager] Initialization complete!")
+end
+
+function WeaponManager.OnPlayerJoined(player)
+	-- Starte mit Pistole (Slot 1)
+	WeaponStates[player] = CreateWeaponState(player, 1)
+
+	player.CharacterAdded:Connect(function(character)
+		-- Re-equip Waffe bei Respawn
+		task.wait(0.5)
+		local state = WeaponStates[player]
+		if state then
+			WeaponManager.EquipWeaponModel(player, state.WeaponSlot)
+		end
+	end)
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- WEAPON EQUIPPING
+-- ═══════════════════════════════════════════════════════════════
+
+function WeaponManager.EquipWeapon(player, weaponSlot)
+	if not PlayerManager then return false end
+
+	-- Prüfe ob Waffe freigeschaltet
+	local unlockedWeapons = PlayerManager.GetUnlockedWeapons(player)
+	local isUnlocked = false
+
+	for _, slot in pairs(unlockedWeapons) do
+		if slot == weaponSlot then
+			isUnlocked = true
+			break
+		end
+	end
+
+	if not isUnlocked then
+		return false
+	end
+
+	-- Setze Waffen-State
+	WeaponStates[player] = CreateWeaponState(player, weaponSlot)
+
+	-- Equip Model
+	WeaponManager.EquipWeaponModel(player, weaponSlot)
+
+	-- Sync mit PlayerManager
+	PlayerManager.SelectWeapon(player, weaponSlot)
+
+	print("[WeaponManager] " .. player.Name .. " equipped weapon slot " .. weaponSlot)
+	return true
+end
+
+function WeaponManager.EquipWeaponModel(player, weaponSlot)
+	local character = player.Character
+	if not character then return end
+
+	local weaponConfig = GameConfig.Weapons[weaponSlot]
+	if not weaponConfig then return end
+
+	-- Entferne alte Waffe
+	for _, child in pairs(character:GetChildren()) do
+		if child:IsA("Tool") or child:GetAttribute("IsWeapon") then
+			child:Destroy()
+		end
+	end
+
+	-- Finde Waffen-Model
+	local weaponFolder = GunsFolder:FindFirstChild(weaponConfig.Folder)
+	if not weaponFolder then
+		warn("[WeaponManager] Weapon folder not found: " .. weaponConfig.Folder)
+		return
+	end
+
+	local weaponModel = weaponFolder:FindFirstChild(weaponConfig.Name)
+	if not weaponModel then
+		warn("[WeaponManager] Weapon model not found: " .. weaponConfig.Name)
+		return
+	end
+
+	-- Clone und equip
+	local clonedWeapon = weaponModel:Clone()
+	clonedWeapon:SetAttribute("IsWeapon", true)
+	clonedWeapon:SetAttribute("WeaponSlot", weaponSlot)
+
+	-- Befestige Waffe am HumanoidRootPart (bewegt sich nicht mit Animationen)
+	local rootPart = character:FindFirstChild("HumanoidRootPart")
+
+	-- Bestimme welches Charakter-Model der Spieler hat
+	local characterModel = character:GetAttribute("CharacterModel") or "Denis"
+
+	if rootPart then
+		-- WICHTIG: Alle Parts des Waffen-Models muessen unanchored und massless sein
+		-- und ueber WeldConstraints miteinander verbunden werden
+		local primaryPart = clonedWeapon.PrimaryPart
+
+		-- Falls kein PrimaryPart, suche nach einem
+		if not primaryPart then
+			primaryPart = clonedWeapon:FindFirstChildWhichIsA("BasePart")
+			if primaryPart then
+				clonedWeapon.PrimaryPart = primaryPart
+			end
+		end
+
+		if primaryPart then
+			-- Wende Scale an BEVOR Welds erstellt werden
+			local scale = 1.0
+			if GameConfig.WeaponScales and GameConfig.WeaponScales[characterModel] then
+				scale = GameConfig.WeaponScales[characterModel][weaponSlot] or 1.0
+			end
+
+			if scale ~= 1.0 and clonedWeapon:IsA("Model") then
+				local success, err = pcall(function()
+					clonedWeapon:ScaleTo(scale)
+				end)
+				if not success then
+					warn("[WeaponManager] ScaleTo fehlgeschlagen:", err)
+				else
+					print("[WeaponManager] Waffe skaliert auf " .. scale .. " fuer " .. characterModel)
+				end
+			end
+
+			-- Setze alle Parts des Waffen-Models auf unanchored und massless
+			for _, part in pairs(clonedWeapon:GetDescendants()) do
+				if part:IsA("BasePart") then
+					part.Anchored = false
+					part.CanCollide = false
+					part.Massless = true
+
+					-- Welde alle anderen Parts an das PrimaryPart
+					if part ~= primaryPart then
+						local weldConstraint = Instance.new("WeldConstraint")
+						weldConstraint.Part0 = primaryPart
+						weldConstraint.Part1 = part
+						weldConstraint.Parent = part
+					end
+				end
+			end
+
+			-- Welde das PrimaryPart an HumanoidRootPart (stabil, keine Bewegung)
+			local weld = Instance.new("Weld")
+			weld.Part0 = rootPart
+			weld.Part1 = primaryPart
+
+			-- Hole charakterspezifischen Offset aus Config oder nutze Default
+			-- Diese Werte koennen mit dem WeaponPositioner Tool angepasst werden
+			local offset = nil
+			if GameConfig.WeaponOffsets and GameConfig.WeaponOffsets[characterModel] then
+				offset = GameConfig.WeaponOffsets[characterModel][weaponSlot]
+			end
+
+			if offset then
+				weld.C0 = offset
+			else
+				-- Default Offset fuer HumanoidRootPart-Befestigung
+				-- Position: rechts vom Koerper, auf Handhoehe
+				-- Waffe zeigt nach vorne (Z-Achse)
+				weld.C0 = CFrame.new(0.5, 0, -1.5) * CFrame.Angles(0, 0, 0)
+			end
+
+			weld.Parent = clonedWeapon
+		end
+	end
+
+	clonedWeapon.Parent = character
+
+	-- Informiere Client über Animation-Wechsel
+	local characterModel = character:GetAttribute("CharacterModel") or "Denis"
+	WeaponEquipRemote:FireClient(player, weaponSlot, weaponConfig.AnimationType, characterModel)
+end
+
+-- Hilfsfunktion: Finde Muzzle Part einer Waffe
+local function GetWeaponMuzzle(character)
+	for _, child in pairs(character:GetChildren()) do
+		if child:GetAttribute("IsWeapon") then
+			local muzzle = child:FindFirstChild("Muzzle")
+			if muzzle then
+				return muzzle
+			end
+			-- Falls kein Muzzle, nutze PrimaryPart
+			return child.PrimaryPart
+		end
+	end
+	return nil
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- FIRING SYSTEM
+-- ═══════════════════════════════════════════════════════════════
+
+function WeaponManager.HandleFire(player, targetPosition, isFiring)
+	local state = WeaponStates[player]
+	if not state then return end
+	if state.IsReloading then return end
+
+	local config = state.Config
+
+	-- Spezialfall: Automatische Waffen
+	if config.Automatic then
+		state.IsFiring = isFiring
+
+		if isFiring then
+			task.spawn(function()
+				WeaponManager.AutomaticFireLoop(player)
+			end)
+		end
+	else
+		-- Einzelschuss
+		WeaponManager.FireWeapon(player, targetPosition)
+	end
+end
+
+function WeaponManager.AutomaticFireLoop(player)
+	local state = WeaponStates[player]
+	if not state then return end
+
+	while state.IsFiring and state.CurrentAmmo > 0 and not state.IsReloading do
+		local character = player.Character
+		if not character then break end
+
+		local humanoid = character:FindFirstChildOfClass("Humanoid")
+		if not humanoid or humanoid.Health <= 0 then break end
+
+		-- Berechne Zielposition basierend auf Maus-Richtung
+		-- (wird vom Client gesendet)
+		WeaponManager.FireWeapon(player, nil)
+
+		task.wait(state.Config.FireRate)
+	end
+end
+
+function WeaponManager.FireWeapon(player, targetPosition)
+	local state = WeaponStates[player]
+	if not state then return end
+
+	local currentTime = tick()
+	local config = state.Config
+
+	-- Fire Rate Check
+	if currentTime - state.LastFireTime < config.FireRate then
+		return
+	end
+
+	-- Ammo Check
+	if state.CurrentAmmo <= 0 then
+		WeaponManager.HandleReload(player)
+		return
+	end
+
+	-- Spezialfall: Minigun Spin-Up
+	if config.SpinUpTime then
+		if not state.IsSpinningUp then
+			state.IsSpinningUp = true
+			state.SpinUpStartTime = currentTime
+			return
+		end
+
+		if currentTime - state.SpinUpStartTime < config.SpinUpTime then
+			return
+		end
+	end
+
+	-- Fire!
+	state.LastFireTime = currentTime
+	state.CurrentAmmo = state.CurrentAmmo - 1
+
+	-- Bestimme Waffentyp und führe entsprechenden Angriff aus
+	local weaponSlot = state.WeaponSlot
+
+	if weaponSlot == 6 then -- Granate
+		WeaponManager.ThrowGrenade(player, targetPosition)
+	elseif weaponSlot == 7 then -- Flammenwerfer
+		WeaponManager.FireFlamethrower(player)
+	elseif weaponSlot == 9 then -- Bazooka
+		WeaponManager.FireRocket(player, targetPosition)
+	elseif config.Pellets then -- Shotgun
+		WeaponManager.FireShotgun(player, targetPosition)
+	else -- Standard Raycast
+		WeaponManager.FireRaycast(player, targetPosition)
+	end
+
+	-- Sync Ammo mit Client
+	WeaponFireRemote:FireClient(player, state.CurrentAmmo, state.MaxAmmo)
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- WAFFEN-SPEZIFISCHE ANGRIFFE
+-- ═══════════════════════════════════════════════════════════════
+
+function WeaponManager.FireRaycast(player, targetPosition)
+	local character = player.Character
+	if not character then return end
+
+	local state = WeaponStates[player]
+	if not state then return end
+
+	local config = state.Config
+
+	-- Nutze Muzzle Part als Ursprung (falls vorhanden)
+	local muzzle = GetWeaponMuzzle(character)
+	local origin
+	if muzzle then
+		origin = muzzle.Position
+	else
+		local head = character:FindFirstChild("Head")
+		if not head then return end
+		origin = head.Position
+	end
+
+	-- Berechne Richtung mit Spread
+	local direction = (targetPosition - origin).Unit
+
+	-- Spread hinzufügen
+	local spreadRad = math.rad(config.Spread or 0)
+	local spreadX = (math.random() - 0.5) * spreadRad
+	local spreadY = (math.random() - 0.5) * spreadRad
+	direction = (CFrame.lookAt(origin, origin + direction) * CFrame.Angles(spreadX, spreadY, 0)).LookVector
+
+	-- Raycast
+	local raycastParams = RaycastParams.new()
+	raycastParams.FilterType = Enum.RaycastFilterType.Exclude
+	raycastParams.FilterDescendantsInstances = {character}
+
+	local result = workspace:Raycast(origin, direction * config.Range, raycastParams)
+
+	if result then
+		local hitPart = result.Instance
+		local hitModel = hitPart:FindFirstAncestorOfClass("Model")
+
+		if hitModel then
+			local zombieType = hitModel:GetAttribute("ZombieType")
+			if zombieType and ZombieManager then
+				-- Treffer auf Zombie
+				local killed = ZombieManager.DamageZombie(hitModel, config.Damage, player)
+				WeaponHitRemote:FireClient(player, result.Position, true, killed)
+
+				if PlayerManager then
+					PlayerManager.AddDamageDealt(player, config.Damage)
+					if killed then
+						PlayerManager.AddKill(player)
+						-- EXP für Kill
+						local expReward = hitModel:GetAttribute("ExpReward") or 10
+						PlayerManager.AddExp(player, expReward)
+					end
+				end
+			end
+		end
+
+		-- Hit Effect für alle Clients
+		WeaponHitRemote:FireAllClients(result.Position, false, false)
+	end
+end
+
+function WeaponManager.FireShotgun(player, targetPosition)
+	local character = player.Character
+	if not character then return end
+
+	local state = WeaponStates[player]
+	if not state then return end
+
+	local config = state.Config
+
+	-- Nutze Muzzle Part als Ursprung
+	local muzzle = GetWeaponMuzzle(character)
+	local origin
+	if muzzle then
+		origin = muzzle.Position
+	else
+		local head = character:FindFirstChild("Head")
+		if not head then return end
+		origin = head.Position
+	end
+
+	local baseDirection = (targetPosition - origin).Unit
+
+	-- Feuere mehrere Pellets
+	for i = 1, config.Pellets do
+		local spreadRad = math.rad(config.Spread or 0)
+		local spreadX = (math.random() - 0.5) * spreadRad
+		local spreadY = (math.random() - 0.5) * spreadRad
+		local direction = (CFrame.lookAt(origin, origin + baseDirection) * CFrame.Angles(spreadX, spreadY, 0)).LookVector
+
+		local raycastParams = RaycastParams.new()
+		raycastParams.FilterType = Enum.RaycastFilterType.Exclude
+		raycastParams.FilterDescendantsInstances = {character}
+
+		local result = workspace:Raycast(origin, direction * config.Range, raycastParams)
+
+		if result then
+			local hitPart = result.Instance
+			local hitModel = hitPart:FindFirstAncestorOfClass("Model")
+
+			if hitModel then
+				local zombieType = hitModel:GetAttribute("ZombieType")
+				if zombieType and ZombieManager then
+					local killed = ZombieManager.DamageZombie(hitModel, config.Damage, player)
+
+					if PlayerManager then
+						PlayerManager.AddDamageDealt(player, config.Damage)
+						if killed then
+							PlayerManager.AddKill(player)
+							local expReward = hitModel:GetAttribute("ExpReward") or 10
+							PlayerManager.AddExp(player, expReward)
+						end
+					end
+				end
+			end
+		end
+	end
+end
+
+function WeaponManager.ThrowGrenade(player, targetPosition)
+	local character = player.Character
+	if not character then return end
+
+	local state = WeaponStates[player]
+	if not state then return end
+
+	local config = state.Config
+	local rootPart = character:FindFirstChild("HumanoidRootPart")
+	if not rootPart then return end
+
+	-- Erstelle Granate
+	local grenade = Instance.new("Part")
+	grenade.Name = "Grenade"
+	grenade.Shape = Enum.PartType.Ball
+	grenade.Size = Vector3.new(1, 1, 1)
+	grenade.Color = Color3.fromRGB(50, 80, 50)
+	grenade.Material = Enum.Material.Metal
+	grenade.Position = rootPart.Position + Vector3.new(0, 2, 0)
+	grenade.Parent = workspace
+
+	-- Wurf-Physik
+	local direction = (targetPosition - rootPart.Position).Unit
+	local bodyVelocity = Instance.new("BodyVelocity")
+	bodyVelocity.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+	bodyVelocity.Velocity = direction * config.ThrowForce + Vector3.new(0, 30, 0)
+	bodyVelocity.Parent = grenade
+
+	-- Entferne BodyVelocity nach kurzer Zeit
+	Debris:AddItem(bodyVelocity, 0.2)
+
+	-- Explosion nach 2 Sekunden
+	task.delay(2, function()
+		if not grenade.Parent then return end
+
+		-- Explosion erstellen
+		local explosion = Instance.new("Explosion")
+		explosion.Position = grenade.Position
+		explosion.BlastRadius = config.ExplosionRadius
+		explosion.BlastPressure = 0 -- Keine Physik-Kraft
+
+		explosion.Hit:Connect(function(hitPart, distance)
+			local hitModel = hitPart:FindFirstAncestorOfClass("Model")
+			if hitModel then
+				local zombieType = hitModel:GetAttribute("ZombieType")
+				if zombieType and ZombieManager then
+					-- Schaden basierend auf Distanz
+					local damageMultiplier = 1 - (distance / config.ExplosionRadius)
+					local damage = config.Damage * damageMultiplier
+					local killed = ZombieManager.DamageZombie(hitModel, damage, player)
+
+					if PlayerManager then
+						PlayerManager.AddDamageDealt(player, damage)
+						if killed then
+							PlayerManager.AddKill(player)
+							local expReward = hitModel:GetAttribute("ExpReward") or 10
+							PlayerManager.AddExp(player, expReward)
+						end
+					end
+				end
+			end
+		end)
+
+		explosion.Parent = workspace
+		grenade:Destroy()
+	end)
+
+	-- Setze Cooldown
+	state.LastFireTime = tick() + config.CooldownTime
+end
+
+function WeaponManager.FireFlamethrower(player)
+	local character = player.Character
+	if not character then return end
+
+	local state = WeaponStates[player]
+	if not state then return end
+
+	local config = state.Config
+
+	-- Fuel Check
+	if state.Fuel <= 0 then
+		WeaponManager.HandleReload(player)
+		return
+	end
+
+	state.Fuel = state.Fuel - (config.FuelPerSecond * config.FireRate)
+
+	local head = character:FindFirstChild("Head")
+	if not head then return end
+
+	-- Cone-based Damage
+	local origin = head.Position
+	local direction = head.CFrame.LookVector
+
+	-- Finde alle Zombies im Bereich
+	for _, zombie in pairs(ZombieManager.GetAllZombies()) do
+		local zombieRoot = zombie.PrimaryPart or zombie:FindFirstChild("HumanoidRootPart")
+		if zombieRoot then
+			local toZombie = (zombieRoot.Position - origin)
+			local distance = toZombie.Magnitude
+
+			if distance <= config.Range then
+				-- Prüfe Winkel
+				local angle = math.acos(toZombie.Unit:Dot(direction))
+				if angle < math.rad(30) then -- 30 Grad Kegel
+					local damage = config.DamagePerSecond * 0.1 -- Schaden pro Tick
+					local killed = ZombieManager.DamageZombie(zombie, damage, player)
+
+					if PlayerManager then
+						PlayerManager.AddDamageDealt(player, damage)
+						if killed then
+							PlayerManager.AddKill(player)
+							local expReward = zombie:GetAttribute("ExpReward") or 10
+							PlayerManager.AddExp(player, expReward)
+						end
+					end
+				end
+			end
+		end
+	end
+end
+
+function WeaponManager.FireRocket(player, targetPosition)
+	local character = player.Character
+	if not character then return end
+
+	local state = WeaponStates[player]
+	if not state then return end
+
+	local config = state.Config
+	local rootPart = character:FindFirstChild("HumanoidRootPart")
+	if not rootPart then return end
+
+	-- Erstelle Rakete
+	local rocket = Instance.new("Part")
+	rocket.Name = "Rocket"
+	rocket.Size = Vector3.new(0.5, 0.5, 2)
+	rocket.Color = Color3.fromRGB(80, 80, 80)
+	rocket.Material = Enum.Material.Metal
+	rocket.CanCollide = false
+	rocket.Position = rootPart.Position + rootPart.CFrame.LookVector * 3
+	rocket.Parent = workspace
+
+	-- Feuer-Effekt
+	local fire = Instance.new("Fire")
+	fire.Size = 3
+	fire.Heat = 5
+	fire.Parent = rocket
+
+	-- Bewegung
+	local direction = (targetPosition - rocket.Position).Unit
+	local bodyVelocity = Instance.new("BodyVelocity")
+	bodyVelocity.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+	bodyVelocity.Velocity = direction * config.ProjectileSpeed
+	bodyVelocity.Parent = rocket
+
+	-- Ausrichten
+	local bodyGyro = Instance.new("BodyGyro")
+	bodyGyro.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
+	bodyGyro.CFrame = CFrame.lookAt(rocket.Position, rocket.Position + direction)
+	bodyGyro.Parent = rocket
+
+	-- Collision Handler
+	rocket.Touched:Connect(function(hitPart)
+		if not rocket.Parent then return end
+		if hitPart:IsDescendantOf(character) then return end
+
+		-- Explosion
+		local explosion = Instance.new("Explosion")
+		explosion.Position = rocket.Position
+		explosion.BlastRadius = config.ExplosionRadius
+		explosion.BlastPressure = 0
+
+		explosion.Hit:Connect(function(hitPart2, distance)
+			local hitModel = hitPart2:FindFirstAncestorOfClass("Model")
+			if hitModel then
+				local zombieType = hitModel:GetAttribute("ZombieType")
+				if zombieType and ZombieManager then
+					local damageMultiplier = 1 - (distance / config.ExplosionRadius)
+					local damage = config.Damage * damageMultiplier
+					local killed = ZombieManager.DamageZombie(hitModel, damage, player)
+
+					if PlayerManager then
+						PlayerManager.AddDamageDealt(player, damage)
+						if killed then
+							PlayerManager.AddKill(player)
+							local expReward = hitModel:GetAttribute("ExpReward") or 10
+							PlayerManager.AddExp(player, expReward)
+						end
+					end
+				end
+			end
+		end)
+
+		explosion.Parent = workspace
+		rocket:Destroy()
+	end)
+
+	-- Auto-Destroy nach 10 Sekunden
+	Debris:AddItem(rocket, 10)
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- RELOAD SYSTEM
+-- ═══════════════════════════════════════════════════════════════
+
+function WeaponManager.HandleReload(player)
+	local state = WeaponStates[player]
+	if not state then return end
+	if state.IsReloading then return end
+	if state.CurrentAmmo >= state.MaxAmmo then return end
+
+	local config = state.Config
+
+	state.IsReloading = true
+	state.IsFiring = false
+
+	-- Informiere Client
+	WeaponReloadRemote:FireClient(player, config.ReloadTime)
+
+	task.delay(config.ReloadTime, function()
+		if WeaponStates[player] == state then
+			state.CurrentAmmo = state.MaxAmmo
+			state.IsReloading = false
+
+			-- Flammenwerfer: Fuel nachladen
+			if config.FuelMax then
+				state.Fuel = config.FuelMax
+			end
+
+			WeaponFireRemote:FireClient(player, state.CurrentAmmo, state.MaxAmmo)
+		end
+	end)
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- UTILITY
+-- ═══════════════════════════════════════════════════════════════
+
+function WeaponManager.GetWeaponState(player)
+	return WeaponStates[player]
+end
+
+function WeaponManager.GetCurrentAmmo(player)
+	local state = WeaponStates[player]
+	if not state then return 0, 0 end
+	return state.CurrentAmmo, state.MaxAmmo
+end
+
+return WeaponManager

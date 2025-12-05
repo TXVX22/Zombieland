@@ -1,0 +1,356 @@
+-- ZombieManager.lua
+-- Platzierung: ServerScriptService/Modules/ZombieManager (ModuleScript)
+
+local ZombieManager = {}
+
+-- Services
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerStorage = game:GetService("ServerStorage")
+local RunService = game:GetService("RunService")
+
+-- Modules
+local GameConfig = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("GameConfig"))
+
+-- Remotes
+local Remotes = ReplicatedStorage:WaitForChild("Remotes", 30)
+local WaveUpdateRemote = Remotes:WaitForChild("WaveUpdate")
+local ZombieSpawnedRemote = Remotes:WaitForChild("ZombieSpawned")
+local ZombieDiedRemote = Remotes:WaitForChild("ZombieDied")
+
+-- Zombie Storage
+local ZombieFolder = workspace:FindFirstChild("Zombies") or Instance.new("Folder")
+ZombieFolder.Name = "Zombies"
+ZombieFolder.Parent = workspace
+
+-- Spawn Points
+local SpawnPointsFolder = workspace:WaitForChild("EnemySpawns")
+local SpawnPoints = {}
+
+-- State
+local CurrentWave = 0
+local ZombiesAlive = 0
+local TotalZombiesToSpawn = 0
+local ZombiesSpawned = 0
+local WaveInProgress = false
+local GameRunning = false
+
+-- Zombie Templates
+local ZombieTemplates = {}
+
+-- ═══════════════════════════════════════════════════════════════
+-- INITIALISIERUNG
+-- ═══════════════════════════════════════════════════════════════
+
+function ZombieManager.Initialize()
+	print("[ZombieManager] Initializing...")
+
+	-- Lade Spawn Points
+	for i = 1, 8 do
+		local spawnPoint = SpawnPointsFolder:FindFirstChild("Spawn" .. i)
+		if spawnPoint then
+			table.insert(SpawnPoints, spawnPoint)
+			print("[ZombieManager] Found spawn point: Spawn" .. i)
+		else
+			warn("[ZombieManager] Missing spawn point: Spawn" .. i)
+		end
+	end
+
+	-- Lade Zombie Templates
+	local zombieAssets = ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Zombies")
+	for zombieType, _ in pairs(GameConfig.Zombies) do
+		local template = zombieAssets:FindFirstChild(zombieType)
+		if template then
+			ZombieTemplates[zombieType] = template
+			print("[ZombieManager] Loaded zombie template: " .. zombieType)
+		else
+			warn("[ZombieManager] Missing zombie template: " .. zombieType)
+		end
+	end
+
+	print("[ZombieManager] Initialization complete!")
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- SPAWN SYSTEM
+-- ═══════════════════════════════════════════════════════════════
+
+local function GetRandomSpawnPoint()
+	if #SpawnPoints == 0 then
+		warn("[ZombieManager] No spawn points available!")
+		return nil
+	end
+	return SpawnPoints[math.random(1, #SpawnPoints)]
+end
+
+local function CreateZombie(zombieType, spawnPoint)
+	local template = ZombieTemplates[zombieType]
+	if not template then
+		warn("[ZombieManager] No template for zombie type: " .. zombieType)
+		return nil
+	end
+
+	local config = GameConfig.Zombies[zombieType]
+	if not config then
+		warn("[ZombieManager] No config for zombie type: " .. zombieType)
+		return nil
+	end
+
+	-- Clone Zombie
+	local zombie = template:Clone()
+	zombie.Name = zombieType .. "_" .. os.clock()
+
+	-- Finde Root Part (Zombies haben KEINEN HumanoidRootPart!)
+	-- Suche nach dem Haupt-Part des Models
+	local rootPart = zombie.PrimaryPart
+	if not rootPart then
+		-- Suche nach typischen Root-Parts in Zombie-Models
+		rootPart = zombie:FindFirstChild("Torso")
+			or zombie:FindFirstChild("UpperTorso")
+			or zombie:FindFirstChild("Root")
+			or zombie:FindFirstChild("RootPart")
+			or zombie:FindFirstChildWhichIsA("BasePart")
+	end
+
+	-- Setze PrimaryPart falls nicht gesetzt
+	if rootPart and not zombie.PrimaryPart then
+		zombie.PrimaryPart = rootPart
+	end
+
+	-- Position setzen
+	if zombie.PrimaryPart then
+		zombie:SetPrimaryPartCFrame(CFrame.new(spawnPoint.Position + Vector3.new(0, 3, 0)))
+	elseif rootPart then
+		-- Fallback: Bewege alle Parts relativ
+		local offset = spawnPoint.Position + Vector3.new(0, 3, 0) - rootPart.Position
+		for _, part in pairs(zombie:GetDescendants()) do
+			if part:IsA("BasePart") then
+				part.Position = part.Position + offset
+			end
+		end
+	end
+
+	-- Humanoid Setup - Zombies haben bereits einen Humanoid
+	local humanoid = zombie:FindFirstChildOfClass("Humanoid")
+	if humanoid then
+		humanoid.MaxHealth = config.Health
+		humanoid.Health = config.Health
+		humanoid.WalkSpeed = GameConfig.Player.BaseWalkSpeed * config.SpeedMultiplier
+	else
+		-- Erstelle Humanoid falls nicht vorhanden
+		humanoid = Instance.new("Humanoid")
+		humanoid.MaxHealth = config.Health
+		humanoid.Health = config.Health
+		humanoid.WalkSpeed = GameConfig.Player.BaseWalkSpeed * config.SpeedMultiplier
+		humanoid.Parent = zombie
+	end
+
+	-- Speichere Root Part Referenz als Attribut
+	if rootPart then
+		zombie:SetAttribute("RootPartName", rootPart.Name)
+	end
+
+	-- Speichere Zombie-Daten als Attribute
+	zombie:SetAttribute("ZombieType", zombieType)
+	zombie:SetAttribute("Damage", config.Damage)
+	zombie:SetAttribute("AttackRange", config.AttackRange)
+	zombie:SetAttribute("AttackCooldown", config.AttackCooldown)
+	zombie:SetAttribute("ExpReward", config.ExpReward)
+	zombie:SetAttribute("IsRanged", config.IsRanged or false)
+
+	-- Parent setzen
+	zombie.Parent = ZombieFolder
+
+	-- Zombie Death Handler
+	humanoid.Died:Connect(function()
+		ZombieManager.OnZombieDied(zombie)
+	end)
+
+	return zombie
+end
+
+function ZombieManager.SpawnZombie(zombieType)
+	local spawnPoint = GetRandomSpawnPoint()
+	if not spawnPoint then return nil end
+
+	local zombie = CreateZombie(zombieType, spawnPoint)
+	if zombie then
+		ZombiesAlive = ZombiesAlive + 1
+		ZombiesSpawned = ZombiesSpawned + 1
+
+		-- Informiere Clients
+		ZombieSpawnedRemote:FireAllClients(zombie, zombieType)
+
+		print("[ZombieManager] Spawned " .. zombieType .. " at " .. spawnPoint.Name)
+	end
+
+	return zombie
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- WELLEN SYSTEM
+-- ═══════════════════════════════════════════════════════════════
+
+function ZombieManager.StartWave(waveNumber)
+	if WaveInProgress then
+		warn("[ZombieManager] Wave already in progress!")
+		return
+	end
+
+	CurrentWave = waveNumber
+	WaveInProgress = true
+	ZombiesSpawned = 0
+
+	-- Berechne Zombie-Anzahl basierend auf Spieleranzahl
+	local playerCount = #Players:GetPlayers()
+	playerCount = math.max(playerCount, 1) -- Mindestens 1
+
+	local waveData = GameConfig.GetWaveData(waveNumber, playerCount)
+
+	-- Zähle totale Zombies
+	TotalZombiesToSpawn = 0
+	for _, count in pairs(waveData) do
+		TotalZombiesToSpawn = TotalZombiesToSpawn + count
+	end
+
+	print("[ZombieManager] Starting Wave " .. waveNumber .. " with " .. TotalZombiesToSpawn .. " zombies for " .. playerCount .. " players")
+
+	-- Informiere Clients über Wellenstart
+	WaveUpdateRemote:FireAllClients("WaveStart", waveNumber, TotalZombiesToSpawn)
+
+	-- Spawn Zombies verteilt
+	task.spawn(function()
+		for zombieType, count in pairs(waveData) do
+			for i = 1, count do
+				if not GameRunning then break end
+
+				ZombieManager.SpawnZombie(zombieType)
+				task.wait(GameConfig.Timing.SpawnInterval)
+			end
+		end
+	end)
+end
+
+function ZombieManager.OnZombieDied(zombie)
+	ZombiesAlive = ZombiesAlive - 1
+
+	local zombieType = zombie:GetAttribute("ZombieType")
+	local expReward = zombie:GetAttribute("ExpReward") or 10
+
+	-- Informiere Clients
+	ZombieDiedRemote:FireAllClients(zombie, expReward)
+
+	print("[ZombieManager] Zombie died: " .. (zombieType or "Unknown") .. " | Remaining: " .. ZombiesAlive)
+
+	-- Prüfe ob Welle beendet
+	if ZombiesAlive <= 0 and ZombiesSpawned >= TotalZombiesToSpawn then
+		ZombieManager.EndWave()
+	end
+
+	-- Cleanup nach kurzer Zeit
+	task.delay(3, function()
+		if zombie and zombie.Parent then
+			zombie:Destroy()
+		end
+	end)
+end
+
+function ZombieManager.EndWave()
+	WaveInProgress = false
+
+	print("[ZombieManager] Wave " .. CurrentWave .. " completed!")
+
+	-- Informiere Clients
+	WaveUpdateRemote:FireAllClients("WaveEnd", CurrentWave)
+
+	-- Automatisch nächste Welle starten
+	if GameRunning then
+		task.delay(GameConfig.Timing.WaveEndDelay, function()
+			if GameRunning then
+				ZombieManager.StartWave(CurrentWave + 1)
+			end
+		end)
+	end
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- GAME CONTROL
+-- ═══════════════════════════════════════════════════════════════
+
+function ZombieManager.StartGame()
+	if GameRunning then return end
+
+	GameRunning = true
+	CurrentWave = 0
+	ZombiesAlive = 0
+
+	print("[ZombieManager] Game started! First wave in " .. GameConfig.Timing.WaveStartDelay .. " seconds...")
+
+	-- Warte vor erster Welle
+	task.delay(GameConfig.Timing.WaveStartDelay, function()
+		if GameRunning then
+			ZombieManager.StartWave(1)
+		end
+	end)
+end
+
+function ZombieManager.StopGame()
+	GameRunning = false
+	WaveInProgress = false
+
+	-- Entferne alle Zombies
+	for _, zombie in pairs(ZombieFolder:GetChildren()) do
+		zombie:Destroy()
+	end
+
+	ZombiesAlive = 0
+	CurrentWave = 0
+
+	print("[ZombieManager] Game stopped!")
+end
+
+function ZombieManager.GetCurrentWave()
+	return CurrentWave
+end
+
+function ZombieManager.GetZombiesAlive()
+	return ZombiesAlive
+end
+
+function ZombieManager.IsWaveInProgress()
+	return WaveInProgress
+end
+
+function ZombieManager.IsGameRunning()
+	return GameRunning
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- ZOMBIE DAMAGE (von außen aufgerufen)
+-- ═══════════════════════════════════════════════════════════════
+
+function ZombieManager.DamageZombie(zombie, damage, attacker)
+	if not zombie or not zombie.Parent then return false end
+
+	local humanoid = zombie:FindFirstChildOfClass("Humanoid")
+	if not humanoid or humanoid.Health <= 0 then return false end
+
+	humanoid:TakeDamage(damage)
+
+	-- Rückgabe ob Zombie gestorben ist
+	return humanoid.Health <= 0
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- UTILITY
+-- ═══════════════════════════════════════════════════════════════
+
+function ZombieManager.GetAllZombies()
+	return ZombieFolder:GetChildren()
+end
+
+function ZombieManager.GetZombieFolder()
+	return ZombieFolder
+end
+
+return ZombieManager

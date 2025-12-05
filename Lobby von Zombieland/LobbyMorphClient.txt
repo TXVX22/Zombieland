@@ -1,0 +1,1565 @@
+-- COMPLETE FIXED LOBBY MORPH CLIENT (PC & Mobile kompatibel)
+-- StarterPlayer/StarterPlayerScripts/LobbyMorphClient (LocalScript)
+
+print("[LOBBY MORPH CLIENT] Starting complete fixed version...")
+
+-- WARTE AUF ROBUX ADDON
+task.spawn(function()
+	repeat 
+		wait(0.1) 
+	until _G.CreateDualPurchaseButton
+	print("[LOBBY MORPH CLIENT] Robux addon loaded!")
+end)
+print("[LOBBY MORPH CLIENT] Robux addon loaded!")
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+
+-- ===== NEUE, VERBESSERTE PLATTFORM-ERKENNUNG (Änderung #3) =====
+local function getDeviceType()
+	local camera = workspace.CurrentCamera
+	if not camera then return "desktop" end
+
+	local viewportSize = camera.ViewportSize
+
+	-- Neue Kategorisierung nach Bildschirmbreite
+	if viewportSize.X < 600 then
+		return "PHONE"
+	elseif viewportSize.X < 1024 then
+		return "TABLET"
+	else
+		return "DESKTOP"
+	end
+end
+
+local deviceType = getDeviceType()
+local isMobile = (deviceType == "PHONE" or deviceType == "TABLET")
+print("[LOBBY MORPH CLIENT] Final platform detection:", deviceType)
+
+-- ===== NEU: WEB-BROWSER SPEZIAL-ANPASSUNG (Änderung #10) =====
+local isWebBrowser = UserInputService.TouchEnabled and UserInputService.KeyboardEnabled
+if isWebBrowser then
+	print("[LOBBY MORPH CLIENT] Detected web browser environment, applying overrides.")
+end
+
+
+-- Wait for remotes
+local remotesFolder = ReplicatedStorage:WaitForChild("ShopRemotes", 30)
+if not remotesFolder then
+	warn("[LOBBY MORPH CLIENT] ShopRemotes folder not found!")
+	return
+end
+
+local remotes = {
+	OpenShop = remotesFolder:WaitForChild("OpenShop"),
+	BuyItem = remotesFolder:WaitForChild("BuyItem"),
+	EquipSkin = remotesFolder:WaitForChild("EquipSkin"),
+	SelectUltimate = remotesFolder:WaitForChild("SelectUltimate"),
+	GetPlayerData = remotesFolder:WaitForChild("GetPlayerData"),
+	UpdateMorphVisuals = remotesFolder:WaitForChild("UpdateMorphVisuals"),
+	ToggleVIPTitle = remotesFolder:WaitForChild("ToggleVIPTitle", 5),
+	ToggleMythicUltimate = remotesFolder:WaitForChild("ToggleMythicUltimate", 5) -- NEU
+}
+
+-- Data Modules
+local UltimateData = require(ReplicatedStorage:WaitForChild("UltimateData"))
+local SoldierSkinData = require(ReplicatedStorage:WaitForChild("SoldierSkinData"))
+
+-- Variables
+local morphGui = nil
+
+-- Colors
+local COLORS = {
+	BACKGROUND = Color3.fromRGB(20, 25, 40),
+	CARD_BG = Color3.fromRGB(30, 35, 55),
+	ICON_BG = Color3.fromRGB(15, 20, 35),
+	OWNED = Color3.fromRGB(46, 204, 113),
+	SELECTED = Color3.fromRGB(52, 152, 219),
+	MYTHIC = Color3.fromRGB(255, 0, 128),
+	ACCENT = Color3.fromRGB(231, 76, 60),
+	TEXT = Color3.fromRGB(255, 255, 255),
+	TEXT_DIM = Color3.fromRGB(189, 195, 199),
+	SUCCESS = Color3.fromRGB(46, 204, 113),
+	ERROR = Color3.fromRGB(231, 76, 60),
+	GOLD = Color3.fromRGB(241, 196, 15),
+	-- Rarity
+	COMMON = Color3.fromRGB(189, 195, 199),
+	RARE = Color3.fromRGB(52, 152, 219),
+	EPIC = Color3.fromRGB(155, 89, 182),
+	LEGENDARY = Color3.fromRGB(241, 196, 15)
+}
+
+-- ===== NEUES, RESPONSIVES GRÖSSEN-SYSTEM (Änderung #4) =====
+local SIZES = {
+	-- Phone (< 600px)
+	PHONE = {
+		mainFrame = UDim2.new(1, 0, 1, 0), -- Fullscreen
+		mainFramePos = UDim2.new(0.5, 0, 0.5, 0),
+		header = UDim2.new(1, 0, 0, 60),
+		tabButton = UDim2.new(0, 55, 0, 50),
+		tabContainer = UDim2.new(1, -10, 0, 60),
+		contentFrame = UDim2.new(1, -10, 1, -130),
+		cardHeight = 90,
+		mythicCardHeight = 110,
+		iconSize = UDim2.new(0, 70, 0, 70),
+		ultimateIconSize = UDim2.new(0, 55, 0, 55),
+		buttonSize = UDim2.new(0, 95, 0, 32),
+		ultimateButtonSize = UDim2.new(0, 85, 0, 30),
+		scrollBarThickness = 4
+	},
+	-- Tablet (600-1024px)
+	TABLET = {
+		mainFrame = UDim2.new(0.95, 0, 0.9, 0),
+		mainFramePos = UDim2.new(0.5, 0, 0.5, 0),
+		header = UDim2.new(1, 0, 0, 65),
+		tabButton = UDim2.new(0, 80, 0, 60),
+		tabContainer = UDim2.new(1, -10, 0, 65),
+		contentFrame = UDim2.new(1, -10, 1, -140),
+		cardHeight = 110,
+		mythicCardHeight = 130,
+		iconSize = UDim2.new(0, 90, 0, 90),
+		ultimateIconSize = UDim2.new(0, 70, 0, 70),
+		buttonSize = UDim2.new(0, 120, 0, 38),
+		ultimateButtonSize = UDim2.new(0, 105, 0, 35),
+		scrollBarThickness = 8
+	},
+	-- Desktop (> 1024px)
+	DESKTOP = {
+		mainFrame = UDim2.new(0, 1000, 0, 600),
+		mainFramePos = UDim2.new(0.5, 0, 0.5, 0),
+		header = UDim2.new(1, 0, 0, 70),
+		tabButton = UDim2.new(0, 100, 0, 65), -- Max width
+		tabContainer = UDim2.new(1, -20, 0, 70),
+		contentFrame = UDim2.new(1, -20, 1, -155),
+		cardHeight = 120,
+		mythicCardHeight = 150,
+		iconSize = UDim2.new(0, 100, 0, 100),
+		ultimateIconSize = UDim2.new(0, 80, 0, 80),
+		buttonSize = UDim2.new(0, 140, 0, 40),
+		ultimateButtonSize = UDim2.new(0, 120, 0, 40),
+		scrollBarThickness = 6
+	}
+}
+
+-- Wähle richtige Größen basierend auf dem Gerätetyp
+local currentSizes = SIZES[deviceType] or SIZES.DESKTOP
+
+-- Wende Web-Browser Overrides an (Änderung #10)
+if isWebBrowser then
+	currentSizes.scrollBarThickness = 12
+	currentSizes.buttonSize = UDim2.new(0, 150, 0, 45)
+end
+
+-- ===== NEU: AUTOMATISCHE FONT-GRÖSSEN-ANPASSUNG (Änderung #8) =====
+local function getScaledTextSize(baseSize)
+	local camera = workspace.CurrentCamera
+	if not camera then return baseSize end
+
+	local scale = camera.ViewportSize.X / 1920  -- Basis ist 1920px
+	return math.max(12, math.floor(baseSize * scale))  -- Min 12px
+end
+
+
+-- ===== HELPER FUNCTION FÜR TRANSPARENTE ICONS =====
+local function createTransparentIcon(parent, iconId, size, position)
+	local iconContainer = Instance.new("Frame")
+	iconContainer.Size = size
+	iconContainer.Position = position
+	iconContainer.BackgroundColor3 = COLORS.ICON_BG
+	iconContainer.BorderSizePixel = 0
+	iconContainer.Parent = parent
+
+	local containerCorner = Instance.new("UICorner")
+	containerCorner.CornerRadius = UDim.new(0, 8)
+	containerCorner.Parent = iconContainer
+
+	local gradient = Instance.new("UIGradient")
+	gradient.Color = ColorSequence.new{
+		ColorSequenceKeypoint.new(0, Color3.fromRGB(25, 30, 45)),
+		ColorSequenceKeypoint.new(1, Color3.fromRGB(15, 20, 35))
+	}
+	gradient.Rotation = 45
+	gradient.Parent = iconContainer
+
+	local iconImage = Instance.new("ImageLabel")
+	iconImage.Size = UDim2.new(1, -10, 1, -10)
+	iconImage.Position = UDim2.new(0, 5, 0, 5)
+	iconImage.BackgroundTransparency = 1
+	iconImage.BorderSizePixel = 0
+	iconImage.Image = iconId or ""
+	iconImage.ImageTransparency = 0
+	iconImage.ScaleType = Enum.ScaleType.Fit
+	iconImage.Parent = iconContainer
+
+	iconImage.ImageColor3 = Color3.fromRGB(255, 255, 255)
+
+	return iconContainer, iconImage
+end
+
+-- ===== SHOP GUI WITH MOBILE OPTIMIZATION =====
+
+local function createShopGUI()
+	print("[LOBBY MORPH CLIENT] Creating shop GUI...")
+
+	local playerData = remotes.GetPlayerData:InvokeServer()
+	if not playerData then
+		warn("[LOBBY MORPH CLIENT] Failed to get player data")
+		return
+	end
+
+	if morphGui then
+		morphGui:Destroy()
+	end
+
+	local screenGui = Instance.new("ScreenGui")
+	screenGui.Name = "LobbyShop"
+	screenGui.ResetOnSpawn = false
+	screenGui.DisplayOrder = 10
+	morphGui = screenGui
+
+	-- Overlay
+	local overlay = Instance.new("Frame")
+	overlay.Size = UDim2.new(1, 0, 1, 0)
+	overlay.BackgroundColor3 = Color3.new(0, 0, 0)
+	overlay.BackgroundTransparency = 0.3
+	overlay.Parent = screenGui
+
+	-- Main Frame
+	local mainFrame = Instance.new("Frame")
+	mainFrame.Name = "MainFrame"
+	mainFrame.Size = currentSizes.mainFrame
+	mainFrame.Position = currentSizes.mainFramePos
+	mainFrame.AnchorPoint = Vector2.new(0.5, 0.5)
+	mainFrame.BackgroundColor3 = COLORS.BACKGROUND
+	mainFrame.BorderSizePixel = 0
+	mainFrame.Parent = screenGui
+
+	local mainCorner = Instance.new("UICorner")
+	mainCorner.CornerRadius = UDim.new(0, deviceType == "PHONE" and 0 or 12)
+	mainCorner.Parent = mainFrame
+
+	-- Header
+	local header = Instance.new("Frame")
+	header.Size = currentSizes.header
+	header.BackgroundColor3 = COLORS.CARD_BG
+	header.BorderSizePixel = 0
+	header.Parent = mainFrame
+
+	-- Title
+	local title = Instance.new("TextLabel")
+	title.Size = isMobile and UDim2.new(0.35, 0, 0.8, 0) or UDim2.new(0.3, 0, 0.7, 0)
+	title.Position = isMobile and UDim2.new(0, 10, 0.1, 0) or UDim2.new(0, 20, 0.15, 0)
+	title.BackgroundTransparency = 1
+	title.Text = isMobile and "SHOP" or "ULTIMATE SHOP"
+	title.TextColor3 = COLORS.TEXT
+	title.TextScaled = true
+	title.Font = Enum.Font.GothamBold
+	title.Parent = header
+
+	-- Panzaro Display
+	local panzaroFrame = Instance.new("Frame")
+	panzaroFrame.Size = isMobile and UDim2.new(0, 120, 0, 35) or UDim2.new(0, 180, 0, 40)
+	panzaroFrame.Position = isMobile and UDim2.new(0.5, -60, 0.5, -17) or UDim2.new(0.5, -90, 0, 15)
+	panzaroFrame.BackgroundColor3 = COLORS.CARD_BG
+	panzaroFrame.Parent = header
+
+	local panzaroCorner = Instance.new("UICorner")
+	panzaroCorner.CornerRadius = UDim.new(0, 6)
+	panzaroCorner.Parent = panzaroFrame
+
+	local panzaroIcon = Instance.new("ImageLabel")
+	panzaroIcon.Size = isMobile and UDim2.new(0, 25, 0, 25) or UDim2.new(0, 35, 0, 35)
+	panzaroIcon.Position = UDim2.new(0, 8, 0.5, 0)
+	panzaroIcon.AnchorPoint = Vector2.new(0, 0.5)
+	panzaroIcon.BackgroundTransparency = 1
+	panzaroIcon.Image = "rbxassetid://110387047670855"
+	panzaroIcon.ImageColor3 = Color3.fromRGB(255, 255, 255)
+	panzaroIcon.ScaleType = Enum.ScaleType.Fit
+	panzaroIcon.Parent = panzaroFrame
+
+	local panzaroLabel = Instance.new("TextLabel")
+	panzaroLabel.Name = "PanzaroLabel"
+	panzaroLabel.Size = UDim2.new(1, isMobile and -40 or -55, 1, 0)
+	panzaroLabel.Position = UDim2.new(0, isMobile and 35 or 48, 0, 0)
+	panzaroLabel.BackgroundTransparency = 1
+	panzaroLabel.Text = tostring(playerData.panzaroCoins or 0)
+	panzaroLabel.TextColor3 = COLORS.GOLD
+	panzaroLabel.TextScaled = true
+	panzaroLabel.Font = Enum.Font.GothamBold
+	panzaroLabel.TextXAlignment = Enum.TextXAlignment.Left
+	panzaroLabel.Parent = panzaroFrame
+
+	-- NEU: Mythic Uses Display
+	local mythicUsesFrame = Instance.new("Frame")
+	mythicUsesFrame.Size = isMobile and UDim2.new(0, 100, 0, 35) or UDim2.new(0, 150, 0, 40)
+	mythicUsesFrame.Position = isMobile and UDim2.new(1, -220, 0.5, -17) or UDim2.new(1, -430, 0, 15)
+	mythicUsesFrame.BackgroundColor3 = Color3.fromRGB(50, 20, 60)
+	mythicUsesFrame.Parent = header
+
+	local mythicUsesCorner = Instance.new("UICorner")
+	mythicUsesCorner.CornerRadius = UDim.new(0, 6)
+	mythicUsesCorner.Parent = mythicUsesFrame
+
+	local mythicIcon = Instance.new("TextLabel")
+	mythicIcon.Size = isMobile and UDim2.new(0, 25, 0, 25) or UDim2.new(0, 30, 0, 30)
+	mythicIcon.Position = UDim2.new(0, 8, 0.5, 0)
+	mythicIcon.AnchorPoint = Vector2.new(0, 0.5)
+	mythicIcon.BackgroundTransparency = 1
+	mythicIcon.Text = "✨"
+	mythicIcon.TextScaled = true
+	mythicIcon.Parent = mythicUsesFrame
+
+	local mythicUsesLabel = Instance.new("TextLabel")
+	mythicUsesLabel.Name = "MythicUsesLabel"
+	mythicUsesLabel.Size = UDim2.new(1, -40, 1, 0)
+	mythicUsesLabel.Position = UDim2.new(0, 35, 0, 0)
+	mythicUsesLabel.BackgroundTransparency = 1
+	mythicUsesLabel.Text = tostring(playerData.mythicUses or 0)
+	mythicUsesLabel.TextColor3 = Color3.fromRGB(255, 100, 255)
+	mythicUsesLabel.TextScaled = true
+	mythicUsesLabel.Font = Enum.Font.GothamBold
+	mythicUsesLabel.TextXAlignment = Enum.TextXAlignment.Left
+	mythicUsesLabel.Parent = mythicUsesFrame
+
+	-- ===== NEU: HEADER FÜR PHONE OPTIMIEREN (Änderung #9) =====
+	if deviceType == "PHONE" then
+		title.Visible = false
+		-- Mehr Platz für Panzaro/Mythic Anzeige
+		panzaroFrame.Position = UDim2.new(0.05, 0, 0.5, -17.5)
+		mythicUsesFrame.Position = UDim2.new(0.95, -100, 0.5, -17.5)
+		panzaroFrame.Size = UDim2.new(0, 100, 0, 35)
+	end
+
+
+	-- Close Button
+	local closeButton = Instance.new("TextButton")
+	closeButton.Size = isMobile and UDim2.new(0, 45, 0, 45) or UDim2.new(0, 35, 0, 35)
+	closeButton.Position = isMobile and UDim2.new(1, -50, 0.5, -22.5) or UDim2.new(1, -45, 0, 17.5)
+	closeButton.BackgroundColor3 = COLORS.ERROR
+	closeButton.Text = "✕"
+	closeButton.TextColor3 = COLORS.TEXT
+	closeButton.TextScaled = true
+	closeButton.Font = Enum.Font.GothamBold
+	closeButton.Parent = header
+
+	local closeCorner = Instance.new("UICorner")
+	closeCorner.CornerRadius = UDim.new(0, 6)
+	closeCorner.Parent = closeButton
+
+	-- TAB CONTAINER
+	local tabContainer
+
+	if isMobile then
+		-- Create scrolling frame for tabs on mobile
+		local tabScroll = Instance.new("ScrollingFrame")
+		tabScroll.Size = UDim2.new(1, -10, 0, 60)
+		tabScroll.Position = UDim2.new(0, 5, 0, 65)
+		tabScroll.BackgroundTransparency = 1
+		tabScroll.BorderSizePixel = 0
+		tabScroll.ScrollBarThickness = 0
+		tabScroll.ScrollingDirection = Enum.ScrollingDirection.X
+		tabScroll.Parent = mainFrame
+		tabContainer = tabScroll
+	else
+		tabContainer = Instance.new("Frame")
+		tabContainer.Size = currentSizes.tabContainer
+		tabContainer.Position = UDim2.new(0, 10, 0, 75)
+		tabContainer.BackgroundTransparency = 1
+		tabContainer.Parent = mainFrame
+	end
+
+	-- Content Frame
+	local contentFrame = Instance.new("ScrollingFrame")
+	contentFrame.Name = "ContentFrame"
+	contentFrame.Size = currentSizes.contentFrame
+	contentFrame.Position = isMobile and UDim2.new(0, 5, 0, 130) or UDim2.new(0, 10, 0, 150)
+	contentFrame.BackgroundColor3 = COLORS.CARD_BG
+	contentFrame.BackgroundTransparency = 0.7
+	contentFrame.BorderSizePixel = 0
+	contentFrame.ScrollBarThickness = currentSizes.scrollBarThickness
+	contentFrame.ScrollBarImageColor3 = COLORS.ACCENT
+	contentFrame.Parent = mainFrame
+
+	local contentCorner = Instance.new("UICorner")
+	contentCorner.CornerRadius = UDim.new(0, 8)
+	contentCorner.Parent = contentFrame
+
+	local currentTab = Instance.new("StringValue")
+	currentTab.Name = "CurrentTab"
+	currentTab.Value = "Skins"
+	currentTab.Parent = mainFrame
+
+	local tabs = {}
+	-- NEU: Panzaro Tab Icon ausgetauscht und isText auf false gesetzt (Änderung #7)
+	local tabData = {
+		{id = "Skins", name = "SKINS", icon = "👕", displayName = "Soldier Skins", isText = true},
+		{id = "Panzaro", name = "PANZARO", icon = "rbxassetid://110387047670855", displayName = "Panzaro Packages", isText = false},
+		{id = "StoneAge", name = "STONE", icon = "rbxassetid://131727433576402", displayName = "Stone Age Ultimates", isText = false},
+		{id = "Medieval", name = "MEDIEVAL", icon = "rbxassetid://108963928153591", displayName = "Medieval Ultimates", isText = false},
+		{id = "Industrial", name = "INDUSTRY", icon = "rbxassetid://74285783949978", displayName = "Industrial Ultimates", isText = false},
+		{id = "Modern", name = "MODERN", icon = "rbxassetid://127655064881724", displayName = "Modern Ultimates", isText = false},
+		{id = "Future", name = "FUTURE", icon = "rbxassetid://126151483049450", displayName = "Future Ultimates", isText = false},
+		{id = "Mythic", name = "MYTHIC", icon = "✨", displayName = "Mythic Ultimates", isText = true},
+		{id = "VIP", name = "VIP", icon = "rbxassetid://114052069497135", displayName = "VIP Pass", isText = false}
+	}
+
+	-- ===== NEU: DYNAMISCHES TAB-LAYOUT (Änderung #1) =====
+	local tabCount = #tabData
+	local tabSpacing = 3
+	local availableWidth = mainFrame.AbsoluteSize.X - 20 -- Gesamte Breite des Tab-Containers
+	local tabWidth = math.floor((availableWidth - (tabSpacing * (tabCount - 1))) / tabCount)
+
+	if not isMobile then
+		tabWidth = math.min(tabWidth, 100) -- Max Breite für Desktop
+	else
+		tabWidth = math.min(tabWidth, 65) -- Max Breite für Mobile
+	end
+
+	-- ===== NEU: TAB-SCROLLING VERBESSERN (Änderung #6) =====
+	if isMobile then
+		local totalTabWidth = (tabWidth * #tabData) + (tabSpacing * (#tabData - 1))
+		tabContainer.CanvasSize = UDim2.new(0, totalTabWidth + 10, 0, 0)
+	end
+
+	local startX = isMobile and 5 or ((mainFrame.AbsoluteSize.X - 20 - (tabWidth * tabCount + tabSpacing * (tabCount-1))) / 2)
+
+
+	for i, tab in ipairs(tabData) do
+		local button = Instance.new("TextButton")
+		button.Name = tab.id
+		button.Size = UDim2.new(0, tabWidth, 1, -5) -- Nutze dynamische Breite
+		button.Position = UDim2.new(0, startX + (i - 1) * (tabWidth + tabSpacing), 0, 2.5)
+		button.BackgroundColor3 = tab.id == "Skins" and COLORS.ACCENT or COLORS.CARD_BG
+		button.BackgroundTransparency = tab.id == "Skins" and 0 or 0.3
+		button.Text = ""
+		button.BorderSizePixel = 0
+		button.Parent = tabContainer
+
+		local corner = Instance.new("UICorner")
+		corner.CornerRadius = UDim.new(0, 8)
+		corner.Parent = button
+
+		-- ===== NEU: KOMPAKTERE TAB-ICONS FÜR MOBILE (Änderung #5) =====
+		if tab.isText then
+			if isMobile then
+				button.Text = tab.icon -- Nur Icon auf Mobile
+			else
+				button.Text = tab.icon .. " " .. tab.name -- Icon und Text auf Desktop
+			end
+			button.TextColor3 = tab.id == "Skins" and COLORS.TEXT or Color3.fromRGB(180, 180, 180)
+			button.TextScaled = true
+			button.Font = Enum.Font.GothamBold
+		else
+			-- Icon buttons (für beide Plattformen gleich)
+			local iconImage = Instance.new("ImageLabel")
+			iconImage.Name = "Icon"
+			iconImage.Size = UDim2.new(0.85, 0, 0.85, 0)
+			iconImage.Position = UDim2.new(0.075, 0, 0.075, 0)
+			iconImage.BackgroundTransparency = 1
+			iconImage.Image = tab.icon
+			iconImage.ImageColor3 = tab.id == "Skins" and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(180, 180, 180)
+			iconImage.ScaleType = Enum.ScaleType.Fit
+			iconImage.Parent = button
+		end
+
+
+		-- Hover/Touch effect
+		button.MouseEnter:Connect(function()
+			if currentTab.Value ~= tab.id then
+				TweenService:Create(button, TweenInfo.new(0.2), {
+					BackgroundColor3 = COLORS.SELECTED,
+					BackgroundTransparency = 0.5
+				}):Play()
+			end
+		end)
+
+		button.MouseLeave:Connect(function()
+			if currentTab.Value ~= tab.id then
+				TweenService:Create(button, TweenInfo.new(0.2), {
+					BackgroundColor3 = COLORS.CARD_BG,
+					BackgroundTransparency = 0.3
+				}):Play()
+			end
+		end)
+
+		tabs[tab.id] = {button = button, data = tab}
+	end
+
+	local function updateContent()
+		playerData = remotes.GetPlayerData:InvokeServer()
+		panzaroLabel.Text = tostring(playerData.panzaroCoins or 0)
+		mythicUsesLabel.Text = tostring(playerData.mythicUses or 0) -- NEU
+
+		local tabValue = currentTab.Value
+		local currentTabData = nil
+
+		for id, tabInfo in pairs(tabs) do
+			if id == tabValue then
+				currentTabData = tabInfo.data
+				break
+			end
+		end
+
+		for _, child in ipairs(contentFrame:GetChildren()) do
+			if child:IsA("Frame") or child:IsA("TextLabel") then
+				child:Destroy()
+			end
+		end
+
+		local yPos = 10
+
+		-- Skip fancy header on mobile to save space
+		if not isMobile and currentTabData then
+			local headerFrame = Instance.new("Frame")
+			headerFrame.Size = UDim2.new(1, -10, 0, 80)
+			headerFrame.Position = UDim2.new(0, 5, 0, yPos)
+			headerFrame.BackgroundColor3 = COLORS.ACCENT
+			headerFrame.BorderSizePixel = 0
+			headerFrame.Parent = contentFrame
+
+			local headerCorner = Instance.new("UICorner")
+			headerCorner.CornerRadius = UDim.new(0, 10)
+			headerCorner.Parent = headerFrame
+
+			local headerGradient = Instance.new("UIGradient")
+			headerGradient.Color = ColorSequence.new{
+				ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 255, 255)),
+				ColorSequenceKeypoint.new(1, Color3.fromRGB(200, 200, 200))
+			}
+			headerGradient.Rotation = 90
+			headerGradient.Parent = headerFrame
+
+			-- Icon in header (if not text tab)
+			if not currentTabData.isText then
+				local headerIcon = Instance.new("ImageLabel")
+				headerIcon.Size = UDim2.new(0, 60, 0, 60)
+				headerIcon.Position = UDim2.new(0, 15, 0.5, -30)
+				headerIcon.BackgroundTransparency = 1
+				headerIcon.Image = currentTabData.icon
+				headerIcon.ScaleType = Enum.ScaleType.Fit
+				headerIcon.Parent = headerFrame
+			end
+
+			-- Title
+			local headerTitle = Instance.new("TextLabel")
+			headerTitle.Size = UDim2.new(0.7, -80, 0.5, 0)
+			headerTitle.Position = UDim2.new(0, currentTabData.isText and 20 or 85, 0, 10)
+			headerTitle.BackgroundTransparency = 1
+			headerTitle.Text = currentTabData.displayName:upper()
+			headerTitle.TextColor3 = COLORS.TEXT
+			headerTitle.TextScaled = true
+			headerTitle.Font = Enum.Font.GothamBold
+			headerTitle.TextXAlignment = Enum.TextXAlignment.Left
+			headerTitle.Parent = headerFrame
+
+			-- Subtitle
+			local headerSubtitle = Instance.new("TextLabel")
+			headerSubtitle.Size = UDim2.new(0.7, -80, 0.4, 0)
+			headerSubtitle.Position = UDim2.new(0, currentTabData.isText and 20 or 85, 0.5, 0)
+			headerSubtitle.BackgroundTransparency = 1
+			headerSubtitle.Text = tabValue == "Skins" and "Customize your soldier appearance" or "Unlock powerful abilities"
+			headerSubtitle.TextColor3 = COLORS.TEXT_DIM
+			headerSubtitle.TextScaled = true
+			headerSubtitle.Font = Enum.Font.Gotham
+			headerSubtitle.TextXAlignment = Enum.TextXAlignment.Left
+			headerSubtitle.Parent = headerFrame
+
+			yPos = yPos + 90
+		end
+
+		if tabValue == "Skins" then
+			local epochOrder = {"StoneAge", "Medieval", "Industrial", "Modern", "Future"}
+
+			local epochIcons = {
+				StoneAge = "rbxassetid://131727433576402",
+				Medieval = "rbxassetid://108963928153591",
+				Industrial = "rbxassetid://74285783949978",
+				Modern = "rbxassetid://127655064881724",
+				Future = "rbxassetid://126151483049450"
+			}
+
+			for _, epochName in ipairs(epochOrder) do
+				-- Epoch headers
+				local epochHeader = Instance.new("Frame")
+				epochHeader.Size = UDim2.new(1, -10, 0, isMobile and 35 or 40)
+				epochHeader.Position = UDim2.new(0, 5, 0, yPos)
+				epochHeader.BackgroundColor3 = COLORS.CARD_BG
+				epochHeader.BorderSizePixel = 0
+				epochHeader.Parent = contentFrame
+
+				local headerCorner = Instance.new("UICorner")
+				headerCorner.CornerRadius = UDim.new(0, 6)
+				headerCorner.Parent = epochHeader
+
+				local headerIcon = Instance.new("ImageLabel")
+				headerIcon.Size = isMobile and UDim2.new(0, 25, 0, 25) or UDim2.new(0, 30, 0, 30)
+				headerIcon.Position = UDim2.new(0, 10, 0.5, 0)
+				headerIcon.AnchorPoint = Vector2.new(0, 0.5)
+				headerIcon.BackgroundTransparency = 1
+				headerIcon.Image = epochIcons[epochName] or ""
+				headerIcon.ImageColor3 = Color3.fromRGB(255, 255, 255)
+				headerIcon.ScaleType = Enum.ScaleType.Fit
+				headerIcon.Parent = epochHeader
+
+				local headerText = Instance.new("TextLabel")
+				headerText.Size = UDim2.new(1, isMobile and -40 or -50, 1, 0)
+				headerText.Position = UDim2.new(0, isMobile and 40 or 45, 0, 0)
+				headerText.BackgroundTransparency = 1
+				headerText.Text = epochName .. " Skins"
+				headerText.TextColor3 = COLORS.TEXT
+				headerText.TextScaled = true
+				headerText.Font = Enum.Font.GothamBold
+				headerText.TextXAlignment = Enum.TextXAlignment.Left
+				headerText.Parent = epochHeader
+
+				yPos = yPos + (isMobile and 40 or 50)
+
+				for _, skin in ipairs(SoldierSkinData.Skins) do
+					if skin.epoch == epochName then
+						local card = Instance.new("Frame")
+						card.Size = UDim2.new(1, -10, 0, currentSizes.cardHeight)
+						card.Position = UDim2.new(0, 5, 0, yPos)
+						card.BackgroundColor3 = COLORS.CARD_BG
+						card.BorderSizePixel = 0
+						card.Parent = contentFrame
+
+						local cardCorner = Instance.new("UICorner")
+						cardCorner.CornerRadius = UDim.new(0, 8)
+						cardCorner.Parent = card
+
+						local iconContainer, iconImage = createTransparentIcon(
+							card,
+							skin.icon or "",
+							currentSizes.iconSize,
+							UDim2.new(0, 10, 0.5, 0)
+						)
+						iconContainer.AnchorPoint = Vector2.new(0, 0.5)
+
+						local nameLabel = Instance.new("TextLabel")
+						nameLabel.Size = UDim2.new(0.35, isMobile and -90 or -110, 0, 25)
+						nameLabel.Position = UDim2.new(0, isMobile and 90 or 120, 0, 10)
+						nameLabel.BackgroundTransparency = 1
+						nameLabel.Text = skin.displayName or skin.name
+						nameLabel.TextColor3 = COLORS.TEXT
+						nameLabel.TextScaled = true
+						nameLabel.Font = Enum.Font.GothamBold
+						nameLabel.TextXAlignment = Enum.TextXAlignment.Left
+						nameLabel.Parent = card
+
+						local rarityColor = COLORS[skin.rarity:upper()] or COLORS.COMMON
+						local rarityBadge = Instance.new("Frame")
+						rarityBadge.Size = UDim2.new(0, isMobile and 60 or 80, 0, 20)
+						rarityBadge.Position = UDim2.new(0, isMobile and 90 or 120, 0, isMobile and 35 or 45)
+						rarityBadge.BackgroundColor3 = rarityColor
+						rarityBadge.BorderSizePixel = 0
+						rarityBadge.Parent = card
+
+						local rarityCorner = Instance.new("UICorner")
+						rarityCorner.CornerRadius = UDim.new(0, 4)
+						rarityCorner.Parent = rarityBadge
+
+						local rarityLabel = Instance.new("TextLabel")
+						rarityLabel.Size = UDim2.new(1, 0, 1, 0)
+						rarityLabel.BackgroundTransparency = 1
+						rarityLabel.Text = skin.rarity or "Common"
+						rarityLabel.TextColor3 = COLORS.TEXT
+						rarityLabel.TextScaled = true
+						rarityLabel.Font = Enum.Font.SourceSansBold
+						rarityLabel.Parent = rarityBadge
+
+						-- Skip description on mobile
+						if deviceType == "DESKTOP" then
+							local descLabel = Instance.new("TextLabel")
+							descLabel.Size = UDim2.new(0.35, -110, 0, 25)
+							descLabel.Position = UDim2.new(0, 120, 0, 75)
+							descLabel.BackgroundTransparency = 1
+							descLabel.Text = skin.description or ""
+							descLabel.TextColor3 = COLORS.TEXT_DIM
+							descLabel.TextScaled = true
+							descLabel.Font = Enum.Font.Gotham
+							descLabel.TextXAlignment = Enum.TextXAlignment.Left
+							descLabel.Parent = card
+						end
+
+						local isOwned = playerData.ownedSkins[skin.name] or false
+						local actualEquippedSkin = playerData.actualEquippedSkin
+						local isEquipped = actualEquippedSkin == skin.name
+
+						if isOwned then
+							if isEquipped then
+								local selectedFrame = Instance.new("Frame")
+								selectedFrame.Size = currentSizes.buttonSize
+								selectedFrame.Position = UDim2.new(1, isMobile and -105 or -150, 0.5, 0)
+								selectedFrame.AnchorPoint = Vector2.new(0, 0.5)
+								selectedFrame.BackgroundColor3 = COLORS.SELECTED
+								selectedFrame.Parent = card
+
+								local selectedCorner = Instance.new("UICorner")
+								selectedCorner.CornerRadius = UDim.new(0, 6)
+								selectedCorner.Parent = selectedFrame
+
+								local selectedLabel = Instance.new("TextLabel")
+								selectedLabel.Size = UDim2.new(1, 0, 1, 0)
+								selectedLabel.BackgroundTransparency = 1
+								selectedLabel.Text = isMobile and "✓" or "✓ EQUIPPED"
+								selectedLabel.TextColor3 = COLORS.TEXT
+								selectedLabel.TextScaled = true
+								selectedLabel.Font = Enum.Font.GothamBold
+								selectedLabel.Parent = selectedFrame
+							else
+								local selectButton = Instance.new("TextButton")
+								selectButton.Size = currentSizes.buttonSize
+								selectButton.Position = UDim2.new(1, isMobile and -105 or -150, 0.5, 0)
+								selectButton.AnchorPoint = Vector2.new(0, 0.5)
+								selectButton.BackgroundColor3 = COLORS.ACCENT
+								selectButton.Text = "EQUIP"
+								selectButton.TextColor3 = COLORS.TEXT
+								selectButton.TextScaled = true
+								selectButton.Font = Enum.Font.GothamBold
+								selectButton.Parent = card
+
+								local selectCorner = Instance.new("UICorner")
+								selectCorner.CornerRadius = UDim.new(0, 6)
+								selectCorner.Parent = selectButton
+
+								selectButton.MouseButton1Click:Connect(function()
+									local success, message = remotes.EquipSkin:InvokeServer(skin.name)
+									if success then
+										updateContent()
+										selectButton.Text = "✓"
+										selectButton.BackgroundColor3 = COLORS.SUCCESS
+										wait(0.5)
+									else
+										selectButton.Text = "✕"
+										selectButton.BackgroundColor3 = COLORS.ERROR
+										wait(1)
+										selectButton.Text = "EQUIP"
+										selectButton.BackgroundColor3 = COLORS.ACCENT
+									end
+								end)
+							end
+						else
+							-- Dual Purchase Button (Panzaro + Robux)
+							if _G.CreateDualPurchaseButton then
+								_G.CreateDualPurchaseButton(
+									card,           -- parent
+									skin.name,      -- item name
+									"skin",         -- item type
+									UDim2.new(1, -110, 0.5, -20),  -- position
+									UDim2.new(0, 100, 0, 40),      -- size
+									isMobile        -- mobile flag
+								)
+							else
+								-- Fallback zum normalen Panzaro Button
+								local buyButton = Instance.new("TextButton")
+								buyButton.Size = isMobile and UDim2.new(0, 100, 0, 35) or UDim2.new(0, 120, 0, 40)
+								buyButton.Position = UDim2.new(1, isMobile and -110 or -130, 0.5, 0)
+								buyButton.AnchorPoint = Vector2.new(0, 0.5)
+								buyButton.BackgroundColor3 = COLORS.GOLD
+								buyButton.BackgroundTransparency = 0.2
+								buyButton.Text = ""
+								buyButton.TextColor3 = COLORS.BACKGROUND
+								buyButton.TextScaled = true
+								buyButton.Font = Enum.Font.GothamBold
+								buyButton.Parent = card
+
+								local buyCorner = Instance.new("UICorner")
+								buyCorner.CornerRadius = UDim.new(0, 6)
+								buyCorner.Parent = buyButton
+
+								local buyIcon = Instance.new("ImageLabel")
+								buyIcon.Size = isMobile and UDim2.new(0, 20, 0, 20) or UDim2.new(0, 24, 0, 24)
+								buyIcon.Position = UDim2.new(0, 8, 0.5, 0)
+								buyIcon.AnchorPoint = Vector2.new(0, 0.5)
+								buyIcon.BackgroundTransparency = 1
+								buyIcon.Image = "rbxassetid://110387047670855"
+								buyIcon.ImageColor3 = Color3.fromRGB(255, 255, 255)
+								buyIcon.ScaleType = Enum.ScaleType.Fit
+								buyIcon.Parent = buyButton
+
+								local priceLabel = Instance.new("TextLabel")
+								priceLabel.Size = UDim2.new(1, isMobile and -35 or -40, 1, 0)
+								priceLabel.Position = UDim2.new(0, isMobile and 32 or 38, 0, 0)
+								priceLabel.BackgroundTransparency = 1
+								priceLabel.Text = tostring(skin.panzaroPrice or 100)
+								priceLabel.TextColor3 = Color3.fromRGB(20, 20, 20)
+								priceLabel.TextScaled = true
+								priceLabel.Font = Enum.Font.GothamBold
+								priceLabel.TextXAlignment = Enum.TextXAlignment.Left
+								priceLabel.Parent = buyButton
+
+								buyButton.MouseButton1Click:Connect(function()
+									local success, message = remotes.BuyItem:InvokeServer("skin", skin.name)
+									if success then
+										updateContent()
+									else
+										buyButton.BackgroundColor3 = COLORS.ERROR
+										wait(0.5)
+										buyButton.BackgroundColor3 = COLORS.GOLD
+									end
+								end)
+							end
+						end
+
+						yPos = yPos + currentSizes.cardHeight + 10
+					end
+				end
+
+				yPos = yPos + 20
+			end
+			-- NEU: Panzaro Tab Logik
+		elseif tabValue == "Panzaro" then
+			-- Panzaro Shop Tab
+			if _G.CreatePanzaroShopTab then
+				yPos = _G.CreatePanzaroShopTab(contentFrame, yPos, isMobile)
+			else
+				-- Fallback message
+				local infoLabel = Instance.new("TextLabel")
+				infoLabel.Size = UDim2.new(1, -20, 0, 100)
+				infoLabel.Position = UDim2.new(0, 10, 0, yPos)
+				infoLabel.BackgroundTransparency = 1
+				infoLabel.Text = "Panzaro shop loading..."
+				infoLabel.TextColor3 = COLORS.TEXT
+				infoLabel.TextScaled = true
+				infoLabel.Font = Enum.Font.Gotham
+				infoLabel.Parent = contentFrame
+			end
+		elseif tabValue == "Mythic" then
+			local mythicUltimates = UltimateData.SpecialUltimates or {}
+
+			-- Erst Uses-Kauf Section
+			local usesCard = Instance.new("Frame")
+			usesCard.Size = UDim2.new(1, -10, 0, isMobile and 120 or 140)
+			usesCard.Position = UDim2.new(0, 5, 0, yPos)
+			usesCard.BackgroundColor3 = Color3.fromRGB(30, 20, 50)
+			usesCard.Parent = contentFrame
+
+			local usesCorner = Instance.new("UICorner")
+			usesCorner.CornerRadius = UDim.new(0, 8)
+			usesCorner.Parent = usesCard
+
+			local usesTitle = Instance.new("TextLabel")
+			usesTitle.Size = UDim2.new(1, -20, 0, 40)
+			usesTitle.Position = UDim2.new(0, 10, 0, 5)
+			usesTitle.BackgroundTransparency = 1
+			usesTitle.Text = "🎟️ MYTHIC ULTIMATE USES"
+			usesTitle.TextColor3 = COLORS.MYTHIC
+			usesTitle.TextScaled = true
+			usesTitle.Font = Enum.Font.GothamBold
+			usesTitle.Parent = usesCard
+
+			-- Kauf-Buttons
+			local buyOptions = {
+				{amount = 1, pos = 0.1},
+				{amount = 3, pos = 0.3},
+				{amount = 5, pos = 0.5},
+				{amount = 10, pos = 0.7},
+				{amount = 25, pos = 0.9}
+			}
+
+			local buttonContainer = Instance.new("Frame")
+			buttonContainer.Size = UDim2.new(1, -20, 1, -50)
+			buttonContainer.Position = UDim2.new(0, 10, 0, 45)
+			buttonContainer.BackgroundTransparency = 1
+			buttonContainer.Parent = usesCard
+
+			for _, option in ipairs(buyOptions) do
+				local buyBtn = Instance.new("TextButton")
+				buyBtn.Size = UDim2.new(0.15, 0, 0, 50)
+				buyBtn.Position = UDim2.new(option.pos - 0.075, 0, 0, 0)
+				buyBtn.BackgroundColor3 = COLORS.MYTHIC
+				buyBtn.BackgroundTransparency = 0.3
+				buyBtn.Text = ""  -- Kein Text direkt
+				buyBtn.Parent = buttonContainer
+
+				local btnCorner = Instance.new("UICorner")
+				btnCorner.CornerRadius = UDim.new(0, 6)
+				btnCorner.Parent = buyBtn
+
+				-- Text für Amount
+				local amountLabel = Instance.new("TextLabel")
+				amountLabel.Size = UDim2.new(1, 0, 0.5, 0)
+				amountLabel.Position = UDim2.new(0, 0, 0, 0)
+				amountLabel.BackgroundTransparency = 1
+				amountLabel.Text = option.amount .. "x"
+				amountLabel.TextColor3 = COLORS.TEXT
+				amountLabel.TextScaled = true
+				amountLabel.Font = Enum.Font.GothamBold
+				amountLabel.Parent = buyBtn
+
+				-- Container für Preis
+				local priceContainer = Instance.new("Frame")
+				priceContainer.Size = UDim2.new(1, 0, 0.5, 0)
+				priceContainer.Position = UDim2.new(0, 0, 0.5, 0)
+				priceContainer.BackgroundTransparency = 1
+				priceContainer.Parent = buyBtn
+
+				-- Panzaro Icon
+				local panzaroIcon = Instance.new("ImageLabel")
+				panzaroIcon.Size = UDim2.new(0, 20, 0, 20)
+				panzaroIcon.Position = UDim2.new(0.5, -25, 0.5, -10)
+				panzaroIcon.BackgroundTransparency = 1
+				panzaroIcon.Image = "rbxassetid://110387047670855"  -- Panzaro Icon ID
+				panzaroIcon.ScaleType = Enum.ScaleType.Fit
+				panzaroIcon.Parent = priceContainer
+
+				-- Preis Text
+				local priceLabel = Instance.new("TextLabel")
+				priceLabel.Size = UDim2.new(0, 30, 1, 0)
+				priceLabel.Position = UDim2.new(0.5, -5, 0, 0)
+				priceLabel.BackgroundTransparency = 1
+				priceLabel.Text = tostring(option.amount * 2)
+				priceLabel.TextColor3 = COLORS.TEXT
+				priceLabel.TextScaled = true
+				priceLabel.Font = Enum.Font.GothamBold
+				priceLabel.Parent = priceContainer
+
+				buyBtn.MouseButton1Click:Connect(function()
+					local success, msg = remotes.BuyItem:InvokeServer("mythicuses", tostring(option.amount))
+					if success then
+						updateContent()
+					else
+						buyBtn.BackgroundColor3 = COLORS.ERROR
+						wait(0.5)
+						buyBtn.BackgroundColor3 = COLORS.MYTHIC
+					end
+				end)
+			end
+
+			yPos = yPos + (isMobile and 130 or 150)
+
+			-- Dann die Mythic Ultimates mit neuem Toggle-System
+			for _, ultimate in ipairs(mythicUltimates) do
+				local card = Instance.new("Frame")
+				card.Size = UDim2.new(1, -10, 0, currentSizes.mythicCardHeight)
+				card.Position = UDim2.new(0, 5, 0, yPos)
+				card.BackgroundColor3 = COLORS.CARD_BG
+				card.BorderSizePixel = 0
+				card.Parent = contentFrame
+
+				local cardCorner = Instance.new("UICorner")
+				cardCorner.CornerRadius = UDim.new(0, 8)
+				cardCorner.Parent = card
+
+				local stroke = Instance.new("UIStroke")
+				stroke.Color = COLORS.MYTHIC
+				stroke.Thickness = 2
+				stroke.Transparency = 0.5
+				stroke.Parent = card
+
+				local iconContainer, iconImage = createTransparentIcon(
+					card,
+					ultimate.icon or "",
+					currentSizes.ultimateIconSize,
+					UDim2.new(0, 15, 0.5, 0)
+				)
+				iconContainer.AnchorPoint = Vector2.new(0, 0.5)
+
+				local nameLabel = Instance.new("TextLabel")
+				nameLabel.Size = UDim2.new(0.5, isMobile and -85 or -100, 0, isMobile and 30 or 40)
+				nameLabel.Position = UDim2.new(0, isMobile and 80 or 110, 0, 10)
+				nameLabel.BackgroundTransparency = 1
+				nameLabel.Text = ultimate.displayName
+				nameLabel.TextColor3 = COLORS.MYTHIC
+				nameLabel.TextScaled = true
+				nameLabel.Font = Enum.Font.GothamBold
+				nameLabel.TextXAlignment = Enum.TextXAlignment.Left
+				nameLabel.Parent = card
+
+				if deviceType == "DESKTOP" then
+					local descLabel = Instance.new("TextLabel")
+					descLabel.Size = UDim2.new(0.5, -100, 0, 60)
+					descLabel.Position = UDim2.new(0, 110, 0, 55)
+					descLabel.BackgroundTransparency = 1
+					descLabel.Text = ultimate.description
+					descLabel.TextColor3 = COLORS.TEXT_DIM
+					descLabel.TextScaled = true
+					descLabel.Font = Enum.Font.Gotham
+					descLabel.TextXAlignment = Enum.TextXAlignment.Left
+					descLabel.Parent = card
+				end
+
+				-- Neue Button-Logik
+				local isActive = playerData.activeMythicUltimate == ultimate.name
+				local hasUses = (playerData.mythicUses or 0) > 0
+
+				if isActive then
+					-- Deactivate Button
+					local deactivateBtn = Instance.new("TextButton")
+					deactivateBtn.Size = currentSizes.ultimateButtonSize
+					deactivateBtn.Position = UDim2.new(1, isMobile and -95 or -130, 0.5, 0)
+					deactivateBtn.AnchorPoint = Vector2.new(0, 0.5)
+					deactivateBtn.BackgroundColor3 = Color3.fromRGB(100, 100, 100)
+					deactivateBtn.Text = "DEACTIVATE"
+					deactivateBtn.TextColor3 = COLORS.TEXT
+					deactivateBtn.TextScaled = true
+					deactivateBtn.Font = Enum.Font.GothamBold
+					deactivateBtn.Parent = card
+
+					local btnCorner = Instance.new("UICorner"); btnCorner.Parent = deactivateBtn
+
+					deactivateBtn.MouseButton1Click:Connect(function()
+						remotes.ToggleMythicUltimate:InvokeServer(ultimate.name)
+						updateContent()
+					end)
+				elseif hasUses then
+					-- Activate Button
+					local activateBtn = Instance.new("TextButton")
+					activateBtn.Size = currentSizes.ultimateButtonSize
+					activateBtn.Position = UDim2.new(1, isMobile and -95 or -130, 0.5, 0)
+					activateBtn.AnchorPoint = Vector2.new(0, 0.5)
+					activateBtn.BackgroundColor3 = COLORS.MYTHIC
+					activateBtn.Text = "ACTIVATE"
+					activateBtn.TextColor3 = COLORS.TEXT
+					activateBtn.TextScaled = true
+					activateBtn.Font = Enum.Font.GothamBold
+					activateBtn.Parent = card
+
+					local btnCorner = Instance.new("UICorner"); btnCorner.Parent = activateBtn
+
+					activateBtn.MouseButton1Click:Connect(function()
+						remotes.ToggleMythicUltimate:InvokeServer(ultimate.name)
+						updateContent()
+					end)
+				else
+					-- No Uses Label
+					local noUsesLabel = Instance.new("TextLabel")
+					noUsesLabel.Size = currentSizes.ultimateButtonSize
+					noUsesLabel.Position = UDim2.new(1, isMobile and -95 or -130, 0.5, 0)
+					noUsesLabel.AnchorPoint = Vector2.new(0, 0.5)
+					noUsesLabel.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+					noUsesLabel.Text = "NO USES"
+					noUsesLabel.TextColor3 = Color3.fromRGB(150, 150, 150)
+					noUsesLabel.TextScaled = true
+					noUsesLabel.Font = Enum.Font.GothamBold
+					noUsesLabel.Parent = card
+
+					local lblCorner = Instance.new("UICorner"); lblCorner.Parent = noUsesLabel
+				end
+
+				yPos = yPos + currentSizes.mythicCardHeight + 10
+			end
+
+		elseif tabValue == "VIP" then
+			-- VIP PASS TAB
+			local vipCard = Instance.new("Frame")
+			vipCard.Size = UDim2.new(1, -10, 0, 250)
+			vipCard.Position = UDim2.new(0, 5, 0, yPos)
+			vipCard.BackgroundColor3 = Color3.fromRGB(20, 25, 50)
+			vipCard.BorderSizePixel = 0
+			vipCard.Parent = contentFrame
+
+			local cardCorner = Instance.new("UICorner")
+			cardCorner.CornerRadius = UDim.new(0, 12)
+			cardCorner.Parent = vipCard
+
+			-- Diamond gradient background
+			local gradient = Instance.new("UIGradient")
+			gradient.Color = ColorSequence.new{
+				ColorSequenceKeypoint.new(0, Color3.fromRGB(185, 242, 255)),
+				ColorSequenceKeypoint.new(0.5, Color3.fromRGB(100, 150, 255)),
+				ColorSequenceKeypoint.new(1, Color3.fromRGB(185, 242, 255))
+			}
+			gradient.Rotation = 45
+			gradient.Transparency = NumberSequence.new{
+				NumberSequenceKeypoint.new(0, 0.9),
+				NumberSequenceKeypoint.new(0.5, 0.8),
+				NumberSequenceKeypoint.new(1, 0.9)
+			}
+			gradient.Parent = vipCard
+
+			-- VIP Icon
+			local iconContainer = Instance.new("Frame")
+			iconContainer.Size = UDim2.new(0, 120, 0, 120)
+			iconContainer.Position = UDim2.new(0, 20, 0.5, -60)
+			iconContainer.BackgroundColor3 = Color3.fromRGB(15, 20, 35)
+			iconContainer.BorderSizePixel = 0
+			iconContainer.Parent = vipCard
+
+			local iconCorner = Instance.new("UICorner")
+			iconCorner.CornerRadius = UDim.new(0, 8)
+			iconCorner.Parent = iconContainer
+
+			local vipIcon = Instance.new("ImageLabel")
+			vipIcon.Size = UDim2.new(1, -20, 1, -20)
+			vipIcon.Position = UDim2.new(0, 10, 0, 10)
+			vipIcon.BackgroundTransparency = 1
+			vipIcon.Image = "rbxassetid://114052069497135"
+			vipIcon.ScaleType = Enum.ScaleType.Fit
+			vipIcon.Parent = iconContainer
+
+			-- Title
+			local titleLabel = Instance.new("TextLabel")
+			titleLabel.Size = UDim2.new(0.5, -150, 0, 50)
+			titleLabel.Position = UDim2.new(0, 150, 0, 20)
+			titleLabel.BackgroundTransparency = 1
+			titleLabel.Text = "💎 VIP PASS 💎"
+			titleLabel.TextColor3 = Color3.fromRGB(185, 242, 255)
+			titleLabel.TextScaled = true
+			titleLabel.Font = Enum.Font.SourceSansBold
+			titleLabel.TextXAlignment = Enum.TextXAlignment.Left
+			titleLabel.Parent = vipCard
+
+			-- Benefits list
+			local benefitsText = "• Zugang zum VIP Bereich\n• VIP Status über deinem Namen\n• Exklusiver VIP Spawn\n• Dauerhaft gültig"
+
+			local benefitsLabel = Instance.new("TextLabel")
+			benefitsLabel.Size = UDim2.new(0.5, -150, 0, 100)
+			benefitsLabel.Position = UDim2.new(0, 150, 0, 75)
+			benefitsLabel.BackgroundTransparency = 1
+			benefitsLabel.Text = benefitsText
+			benefitsLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+			benefitsLabel.TextScaled = true
+			benefitsLabel.Font = Enum.Font.Gotham
+			benefitsLabel.TextXAlignment = Enum.TextXAlignment.Left
+			benefitsLabel.Parent = vipCard
+
+			-- Check if already owns VIP Pass
+			local hasVIPPass = playerData.hasVIPPass or false
+
+			if hasVIPPass then
+				-- Already owns
+				local ownedFrame = Instance.new("Frame")
+				ownedFrame.Size = UDim2.new(0, 180, 0, 50)
+				ownedFrame.Position = UDim2.new(1, -200, 1, -70)
+				ownedFrame.BackgroundColor3 = Color3.fromRGB(185, 242, 255)
+				ownedFrame.Parent = vipCard
+
+				local ownedCorner = Instance.new("UICorner")
+				ownedCorner.CornerRadius = UDim.new(0, 8)
+				ownedCorner.Parent = ownedFrame
+
+				local ownedLabel = Instance.new("TextLabel")
+				ownedLabel.Size = UDim2.new(1, 0, 1, 0)
+				ownedLabel.BackgroundTransparency = 1
+				ownedLabel.Text = "✓ OWNED"
+				ownedLabel.TextColor3 = Color3.fromRGB(20, 20, 20)
+				ownedLabel.TextScaled = true
+				ownedLabel.Font = Enum.Font.SourceSansBold
+				ownedLabel.Parent = ownedFrame
+			else
+				-- Buy button
+				local buyButton = Instance.new("TextButton")
+				buyButton.Size = UDim2.new(0, 180, 0, 50)
+				buyButton.Position = UDim2.new(1, -200, 1, -70)
+				buyButton.BackgroundColor3 = COLORS.GOLD
+				buyButton.Text = ""
+				buyButton.Parent = vipCard
+
+				local buyCorner = Instance.new("UICorner")
+				buyCorner.CornerRadius = UDim.new(0, 8)
+				buyCorner.Parent = buyButton
+
+				local buyIcon = Instance.new("ImageLabel")
+				buyIcon.Size = UDim2.new(0, 30, 0, 30)
+				buyIcon.Position = UDim2.new(0, 15, 0.5, -15)
+				buyIcon.BackgroundTransparency = 1
+				buyIcon.Image = "rbxassetid://110387047670855"
+				buyIcon.ScaleType = Enum.ScaleType.Fit
+				buyIcon.Parent = buyButton
+
+				local priceLabel = Instance.new("TextLabel")
+				priceLabel.Size = UDim2.new(1, -55, 1, 0)
+				priceLabel.Position = UDim2.new(0, 50, 0, 0)
+				priceLabel.BackgroundTransparency = 1
+				priceLabel.Text = "5000"
+				priceLabel.TextColor3 = Color3.fromRGB(20, 20, 20)
+				priceLabel.TextScaled = true
+				priceLabel.Font = Enum.Font.SourceSansBold
+				priceLabel.TextXAlignment = Enum.TextXAlignment.Left
+				priceLabel.Parent = buyButton
+
+				buyButton.MouseButton1Click:Connect(function()
+					local success, message = remotes.BuyItem:InvokeServer("vippass", "vippass")
+					if success then
+						updateContent()
+						-- Show success message
+						buyButton.BackgroundColor3 = COLORS.SUCCESS
+						buyButton.Text = "✓"
+						wait(1)
+						updateContent()
+					else
+						buyButton.BackgroundColor3 = COLORS.ERROR
+						wait(0.5)
+						buyButton.BackgroundColor3 = COLORS.GOLD
+					end
+				end)
+			end
+
+			-- VIP TITLE TOGGLE (only show if player has VIP)
+			if hasVIPPass or playerData.isTop25VIP then
+				-- Toggle Frame
+				local toggleFrame = Instance.new("Frame")
+				toggleFrame.Size = UDim2.new(1, -10, 0, 60)
+				toggleFrame.Position = UDim2.new(0, 5, 0, yPos + 270)
+				toggleFrame.BackgroundColor3 = Color3.fromRGB(30, 35, 55)
+				toggleFrame.BorderSizePixel = 0
+				toggleFrame.Parent = contentFrame
+
+				local toggleCorner = Instance.new("UICorner")
+				toggleCorner.CornerRadius = UDim.new(0, 8)
+				toggleCorner.Parent = toggleFrame
+
+				-- Label
+				local toggleLabel = Instance.new("TextLabel")
+				toggleLabel.Size = UDim2.new(0.6, 0, 1, 0)
+				toggleLabel.Position = UDim2.new(0, 20, 0, 0)
+				toggleLabel.BackgroundTransparency = 1
+				toggleLabel.Text = "VIP Titel anzeigen"
+				toggleLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+				toggleLabel.TextScaled = true
+				toggleLabel.Font = Enum.Font.Gotham
+				toggleLabel.TextXAlignment = Enum.TextXAlignment.Left
+				toggleLabel.Parent = toggleFrame
+
+				-- Toggle Button
+				local toggleButton = Instance.new("TextButton")
+				toggleButton.Size = UDim2.new(0, 80, 0, 40)
+				toggleButton.Position = UDim2.new(1, -100, 0.5, -20)
+				toggleButton.BackgroundColor3 = playerData.vipTitleHidden and Color3.fromRGB(100, 100, 100) or Color3.fromRGB(46, 204, 113)
+				toggleButton.Text = playerData.vipTitleHidden and "AUS" or "AN"
+				toggleButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+				toggleButton.TextScaled = true
+				toggleButton.Font = Enum.Font.SourceSansBold
+				toggleButton.Parent = toggleFrame
+
+				local toggleButtonCorner = Instance.new("UICorner")
+				toggleButtonCorner.CornerRadius = UDim.new(0, 6)
+				toggleButtonCorner.Parent = toggleButton
+
+				toggleButton.MouseButton1Click:Connect(function()
+					local showTitle = playerData.vipTitleHidden -- Invert current state
+					local success = remotes.ToggleVIPTitle:InvokeServer(showTitle)
+
+					if success then
+						playerData.vipTitleHidden = not showTitle
+						toggleButton.Text = showTitle and "AN" or "AUS"
+						toggleButton.BackgroundColor3 = showTitle and Color3.fromRGB(46, 204, 113) or Color3.fromRGB(100, 100, 100)
+					end
+				end)
+
+				yPos = yPos + 340
+			else
+				yPos = yPos + 260
+			end
+
+		else
+			-- REGULAR ULTIMATES
+			local epochUltimates = UltimateData.Ultimates[tabValue] or {}
+
+			for _, ultimate in ipairs(epochUltimates) do
+				local card = Instance.new("Frame")
+				card.Size = UDim2.new(1, -10, 0, currentSizes.cardHeight)
+				card.Position = UDim2.new(0, 5, 0, yPos)
+				card.BackgroundColor3 = COLORS.CARD_BG
+				card.BorderSizePixel = 0
+				card.Parent = contentFrame
+
+				local cardCorner = Instance.new("UICorner")
+				cardCorner.CornerRadius = UDim.new(0, 8)
+				cardCorner.Parent = card
+
+				local iconContainer, iconImage = createTransparentIcon(
+					card,
+					ultimate.icon or "",
+					currentSizes.ultimateIconSize,
+					UDim2.new(0, 15, 0.5, 0)
+				)
+				iconContainer.AnchorPoint = Vector2.new(0, 0.5)
+
+				local rarityColor = COLORS[ultimate.rarity:upper()] or COLORS.COMMON
+				local iconStroke = Instance.new("UIStroke")
+				iconStroke.Color = rarityColor
+				iconStroke.Thickness = 2
+				iconStroke.Parent = iconContainer
+
+				local nameLabel = Instance.new("TextLabel")
+				nameLabel.Size = UDim2.new(0.4, isMobile and -85 or -100, 0, 30)
+				nameLabel.Position = UDim2.new(0, isMobile and 80 or 110, 0, 15)
+				nameLabel.BackgroundTransparency = 1
+				nameLabel.Text = ultimate.displayName
+				nameLabel.TextColor3 = COLORS.TEXT
+				nameLabel.TextScaled = true
+				nameLabel.Font = Enum.Font.GothamBold
+				nameLabel.TextXAlignment = Enum.TextXAlignment.Left
+				nameLabel.Parent = card
+
+				if deviceType == "DESKTOP" then
+					local descLabel = Instance.new("TextLabel")
+					descLabel.Size = UDim2.new(0.4, -100, 0, 40)
+					descLabel.Position = UDim2.new(0, 110, 0, 50)
+					descLabel.BackgroundTransparency = 1
+					descLabel.Text = ultimate.description
+					descLabel.TextColor3 = COLORS.TEXT_DIM
+					descLabel.TextScaled = true
+					descLabel.Font = Enum.Font.Gotham
+					descLabel.TextXAlignment = Enum.TextXAlignment.Left
+					descLabel.Parent = card
+				end
+
+				local isOwned = playerData.ownedUltimates[ultimate.name] or false
+				local isSelected = playerData.selectedUltimates and playerData.selectedUltimates[tabValue] == ultimate.name
+
+				if isOwned then
+					if isSelected then
+						local selectedFrame = Instance.new("Frame")
+						selectedFrame.Size = currentSizes.ultimateButtonSize
+						selectedFrame.Position = UDim2.new(1, isMobile and -95 or -130, 0.5, 0)
+						selectedFrame.AnchorPoint = Vector2.new(0, 0.5)
+						selectedFrame.BackgroundColor3 = COLORS.SELECTED
+						selectedFrame.Parent = card
+
+						local selectedCorner = Instance.new("UICorner")
+						selectedCorner.CornerRadius = UDim.new(0, 6)
+						selectedCorner.Parent = selectedFrame
+
+						local selectedLabel = Instance.new("TextLabel")
+						selectedLabel.Size = UDim2.new(1, 0, 1, 0)
+						selectedLabel.BackgroundTransparency = 1
+						selectedLabel.Text = isMobile and "✓" or "✓ SELECTED"
+						selectedLabel.TextColor3 = COLORS.TEXT
+						selectedLabel.TextScaled = true
+						selectedLabel.Font = Enum.Font.GothamBold
+						selectedLabel.Parent = selectedFrame
+					else
+						local selectButton = Instance.new("TextButton")
+						selectButton.Size = currentSizes.ultimateButtonSize
+						selectButton.Position = UDim2.new(1, isMobile and -95 or -130, 0.5, 0)
+						selectButton.AnchorPoint = Vector2.new(0, 0.5)
+						selectButton.BackgroundColor3 = COLORS.ACCENT
+						selectButton.Text = "SELECT"
+						selectButton.TextColor3 = COLORS.TEXT
+						selectButton.TextScaled = true
+						selectButton.Font = Enum.Font.GothamBold
+						selectButton.Parent = card
+
+						local selectCorner = Instance.new("UICorner")
+						selectCorner.CornerRadius = UDim.new(0, 6)
+						selectCorner.Parent = selectButton
+
+						selectButton.MouseButton1Click:Connect(function()
+							local success = remotes.SelectUltimate:InvokeServer(tabValue, ultimate.name)
+							if success then
+								updateContent()
+							end
+						end)
+					end
+				else
+					-- NEU (Dual Purchase Button für Ultimates):
+					if _G.CreateDualPurchaseButton then
+						_G.CreateDualPurchaseButton(
+							card,           -- parent
+							ultimate.name,  -- item name
+							"ultimate",     -- item type
+							UDim2.new(1, isMobile and -105 or -130, 0.5, -20),
+							UDim2.new(0, isMobile and 95 or 120, 0, 32),
+							isMobile
+						)
+					else
+						-- Fallback zum normalen Button
+						local buyButton = Instance.new("TextButton")
+						buyButton.Size = currentSizes.ultimateButtonSize
+						buyButton.Position = UDim2.new(1, isMobile and -95 or -130, 0.5, 0)
+						buyButton.AnchorPoint = Vector2.new(0, 0.5)
+						buyButton.BackgroundColor3 = COLORS.GOLD
+						buyButton.BackgroundTransparency = 0.2
+						buyButton.Text = ""
+						buyButton.TextColor3 = COLORS.BACKGROUND
+						buyButton.TextScaled = true
+						buyButton.Font = Enum.Font.GothamBold
+						buyButton.Parent = card
+
+						local buyCorner = Instance.new("UICorner")
+						buyCorner.CornerRadius = UDim.new(0, 6)
+						buyCorner.Parent = buyButton
+
+						local buyIcon = Instance.new("ImageLabel")
+						buyIcon.Size = isMobile and UDim2.new(0, 20, 0, 20) or UDim2.new(0, 24, 0, 24)
+						buyIcon.Position = UDim2.new(0, 8, 0.5, 0)
+						buyIcon.AnchorPoint = Vector2.new(0, 0.5)
+						buyIcon.BackgroundTransparency = 1
+						buyIcon.Image = "rbxassetid://110387047670855"
+						buyIcon.ImageColor3 = Color3.fromRGB(255, 255, 255)
+						buyIcon.ScaleType = Enum.ScaleType.Fit
+						buyIcon.Parent = buyButton
+
+						local priceLabel = Instance.new("TextLabel")
+						priceLabel.Size = UDim2.new(1, isMobile and -35 or -40, 1, 0)
+						priceLabel.Position = UDim2.new(0, isMobile and 32 or 38, 0, 0)
+						priceLabel.BackgroundTransparency = 1
+						priceLabel.Text = tostring(ultimate.panzaroPrice)
+						priceLabel.TextColor3 = Color3.fromRGB(20, 20, 20)
+						priceLabel.TextScaled = true
+						priceLabel.Font = Enum.Font.GothamBold
+						priceLabel.TextXAlignment = Enum.TextXAlignment.Left
+						priceLabel.Parent = buyButton
+
+						buyButton.MouseButton1Click:Connect(function()
+							local success, message = remotes.BuyItem:InvokeServer("ultimate", ultimate.name)
+							if success then
+								-- Zeige kurz Erfolg an
+								buyButton.BackgroundColor3 = COLORS.SUCCESS
+								buyButton.Text = "✓"
+								wait(0.3)
+
+								-- Ersetze Buy-Button direkt mit Select-Button
+								buyButton:Destroy()
+
+								local selectButton = Instance.new("TextButton")
+								selectButton.Size = currentSizes.ultimateButtonSize
+								selectButton.Position = UDim2.new(1, isMobile and -95 or -130, 0.5, 0)
+								selectButton.AnchorPoint = Vector2.new(0, 0.5)
+								selectButton.BackgroundColor3 = COLORS.ACCENT
+								selectButton.Text = "SELECT"
+								selectButton.TextColor3 = COLORS.TEXT
+								selectButton.TextScaled = true
+								selectButton.Font = Enum.Font.GothamBold
+								selectButton.Parent = card  -- Hier ist card richtig, weil es im Ultimate-Loop definiert ist
+
+								local selectCorner = Instance.new("UICorner")
+								selectCorner.CornerRadius = UDim.new(0, 6)
+								selectCorner.Parent = selectButton
+
+								selectButton.MouseButton1Click:Connect(function()
+									local success2 = remotes.SelectUltimate:InvokeServer(tabValue, ultimate.name)
+									if success2 then
+										updateContent()
+									end
+								end)
+							else
+								buyButton.BackgroundColor3 = COLORS.ERROR
+								wait(0.5)
+								buyButton.BackgroundColor3 = COLORS.GOLD
+							end
+						end)
+					end
+				end
+
+				yPos = yPos + currentSizes.cardHeight + 10
+			end
+		end
+
+		contentFrame.CanvasSize = UDim2.new(0, 0, 0, yPos + 20)
+	end
+
+	function _G.RefreshShopUI()
+		if morphGui and morphGui.Parent then
+			local mainFrame = morphGui:FindFirstChild("MainFrame")
+			if mainFrame then
+				local currentTab = mainFrame:FindFirstChild("CurrentTab")
+				if currentTab then
+					-- Trigger updateContent
+					updateContent()
+				end
+			end
+		end
+	end
+	-- Tab click handlers
+	for tabId, tabInfo in pairs(tabs) do
+		local button = tabInfo.button
+		local data = tabInfo.data
+
+		if button then
+			button.MouseButton1Click:Connect(function()
+				-- Update all tabs
+				for id, info in pairs(tabs) do
+					if info.button then
+						info.button.BackgroundColor3 = COLORS.CARD_BG
+						info.button.BackgroundTransparency = 0.3
+
+						if info.data.isText then
+							info.button.TextColor3 = Color3.fromRGB(180, 180, 180)
+						else
+							local icon = info.button:FindFirstChild("Icon")
+							if icon then
+								icon.ImageColor3 = Color3.fromRGB(180, 180, 180)
+							end
+						end
+					end
+				end
+
+				-- Highlight selected tab
+				button.BackgroundColor3 = COLORS.ACCENT
+				button.BackgroundTransparency = 0
+
+				if data.isText then
+					button.TextColor3 = COLORS.TEXT
+				else
+					local icon = button:FindFirstChild("Icon")
+					if icon then
+						icon.ImageColor3 = Color3.fromRGB(255, 255, 255)
+					end
+				end
+
+				currentTab.Value = tabId
+				updateContent()
+			end)
+		end
+	end
+
+	closeButton.MouseButton1Click:Connect(function()
+		screenGui:Destroy()
+		morphGui = nil
+	end)
+
+	updateContent()
+	screenGui.Parent = playerGui
+
+	print("[LOBBY MORPH CLIENT] Shop GUI created successfully")
+end
+
+-- ===== REMOTE EVENTS =====
+
+remotes.OpenShop.OnClientEvent:Connect(function()
+	print("[LOBBY MORPH CLIENT] OpenShop event received")
+	createShopGUI()
+end)
+
+remotes.UpdateMorphVisuals.OnClientEvent:Connect(function(targetPlayer, skinName)
+	if targetPlayer == player then
+		print("[LOBBY MORPH CLIENT] You have been morphed to:", skinName or "default")
+	else
+		print("[LOBBY MORPH CLIENT]", targetPlayer.Name, "morphed to:", skinName or "default")
+	end
+end)
+
+-- Debug commands
+player.Chatted:Connect(function(message)
+	if message:lower() == "/openshop" then
+		print("[LOBBY MORPH CLIENT] Manual shop open")
+		createShopGUI()
+	elseif message:lower() == "/debugplatform" then
+		print("[LOBBY MORPH CLIENT] Platform Info:")
+		print("  Detected:", deviceType)
+		print("  isMobile:", isMobile)
+		print("  isWebBrowser:", isWebBrowser)
+		print("  Touch:", UserInputService.TouchEnabled)
+		print("  Keyboard:", UserInputService.KeyboardEnabled)
+		print("  Mouse:", UserInputService.MouseEnabled)
+		local camera = workspace.CurrentCamera
+		if camera then
+			print("  Viewport:", camera.ViewportSize)
+		end
+		-- NEU: Debug-Command für Robux-System
+	elseif message:lower() == "/checkrobux" then
+		print("[DEBUG] Robux System Check:")
+		print("  CreateDualPurchaseButton exists:", _G.CreateDualPurchaseButton ~= nil)
+		print("  CreatePanzaroShopTab exists:", _G.CreatePanzaroShopTab ~= nil)
+		print("  RefreshShopUI exists:", _G.RefreshShopUI ~= nil)
+
+		local remotesFolder = ReplicatedStorage:FindFirstChild("ShopRemotes")
+		if remotesFolder then
+			print("  RobuxPurchase remote:", remotesFolder:FindFirstChild("RobuxPurchase") ~= nil)
+			print("  GetRobuxPrices remote:", remotesFolder:FindFirstChild("GetRobuxPrices") ~= nil)
+		end
+	end
+end)
+
+print("[LOBBY MORPH CLIENT] Loaded successfully (complete version)!")
+print("Platform:", deviceType)
+print("Commands: /openshop, /debugplatform, /checkrobux")

@@ -1,0 +1,501 @@
+-- SoldierData.lua (BALANCED VERSION)
+-- Balanced damage values and costs for proper game progression
+-- Attack speeds, movement speeds, and other stats remain unchanged
+
+local SoldierData = {
+	-- ===== STONE AGE =====
+	Hoehlenmensch = {
+		Name = "Höhlenmensch",
+		Model = "Höhlenmensch",
+		Type = "Melee",
+		Cost = 75,  -- Increased from 50
+		Epoch = "StoneAge",
+
+		Stats = {
+			HP = 100,
+			Damage = 15,  -- Increased from 10
+			AttackSpeed = 1.2,  -- Unchanged
+			MoveSpeed = 4,  -- Unchanged
+			AttackRange = 6
+		},
+
+		Size = 4,
+		Spacing = 6,
+		HeightOffset = 0,
+		ModelScale = 1.8,
+
+		Animations = {
+			BaseIdle = "rbxassetid://90488025370137",
+			Walk = "rbxassetid://87295955944250",
+			Attack = "rbxassetid://137449736453019",
+			Wait = "rbxassetid://126148684897384",
+		},
+
+		AnimationSpeeds = {
+			Walk = 1.0,
+			Attack = 1.0
+		}
+	},
+
+	Bogenschuetze = {
+		Name = "Bogenschütze",
+		Model = "Bogenschütze",
+		Type = "Hybrid",
+		Cost = 100,  -- Increased from 60
+		Epoch = "StoneAge",
+		ProjectileModel = "Arrow",
+		ProjectileRotation = Vector3.new(270, 0, 0),
+		ProjectileScale = 2,
+
+		Stats = {
+			HP = 80,
+			Damage = 12,  -- Increased from 8
+			AttackSpeed = 1.5,  -- Unchanged
+			MoveSpeed = 4,  -- Unchanged
+			AttackRange = 25,
+			MeleeRange = 6
+		},
+
+		Size = 4,
+		Spacing = 6,
+		HeightOffset = 0,
+		ModelScale = 1.8,
+
+		Animations = {
+			BaseIdle = "rbxassetid://130826469092348",
+			Walk = "rbxassetid://96567069206948",
+			Attack = "rbxassetid://130118706648420",
+			Wait = "rbxassetid://124161252772118",
+			ShootWalk = "rbxassetid://85726299030874",
+			RangedAttack = "rbxassetid://112227103384450",
+		}
+	},
+
+	Goblin = {
+		Name = "Goblin",
+		Model = "Goblin",
+		Type = "Hybrid",
+		Cost = 125,  -- Increased from 70
+		Epoch = "StoneAge",
+		ProjectileModel = "Spear",
+		ProjectileRotation = Vector3.new(90, 90, 90),
+		ProjectileScale = 1.5,
+
+		Stats = {
+			HP = 90,
+			Damage = 18,  -- Increased from 12
+			AttackSpeed = 1.2,  -- Unchanged
+			MoveSpeed = 4,  -- Unchanged
+			AttackRange = 50,
+			MeleeRange = 20
+		},
+
+		Size = 4,
+		Spacing = 16,
+		HeightOffset = 6,
+		ModelScale = 1.5,
+
+		Animations = {
+			BaseIdle = "rbxassetid://83080776356007",
+			Walk = "rbxassetid://86170030441693",
+			Attack = "rbxassetid://88936764548471",
+			Wait = "rbxassetid://123182480951208",
+			ShootWalk = "rbxassetid://128832663479454",
+			RangedAttack = "rbxassetid://103402790674450",
+			AfterThrow = "rbxassetid://119881479012225",
+			AfterThrowWalk = "rbxassetid://112469708700404",
+		}
+	},
+
+	-- ===== MEDIEVAL =====
+	Ritter = {
+		Name = "Ritter",
+		Model = "Ritter",
+		Type = "Melee",
+		Cost = 120,  -- Increased from 60
+		Epoch = "Medieval",
+
+		Stats = {
+			HP = 150,  -- Increased from 120
+			Damage = 25,  -- Increased from 15
+			AttackSpeed = 1.3,  -- Unchanged
+			MoveSpeed = 4,  -- Unchanged
+			AttackRange = 8
+		},
+
+		Size = 4,
+		Spacing = 8,
+		HeightOffset = 0,
+		ModelScale = 1.8,
+
+		Animations = {
+			BaseIdle = "rbxassetid://84906814864174",
+			Walk = "rbxassetid://125770220108267",
+			Attack = "rbxassetid://135665943401155",
+			Wait = "rbxassetid://129301950820407",
+		}
+	},
+
+	Armbrustschuetze = {
+		Name = "Armbrustschütze",
+		Model = "Armbrustschütze",
+		Type = "Hybrid",
+		Cost = 175,  -- Increased from 75
+		Epoch = "Medieval",
+		ProjectileModel = "Arrow",
+		ProjectileRotation = Vector3.new(270, 0, 0),
+		ProjectileScale = 2,
+
+		SpawnOffset = Vector3.new(0, 0, -2.125),
+
+		Stats = {
+			HP = 120,  -- Increased from 100
+			Damage = 20,  -- Increased from 12
+			AttackSpeed = 1.8,  -- Unchanged
+			MoveSpeed = 4,  -- Unchanged
+			AttackRange = 30,
+			MeleeRange = 8
+		},
+
+		Size = 4,
+		Spacing = 6,
+		HeightOffset = 0,
+		ModelScale = 1.8,
+
+		Animations = {
+			BaseIdle = "rbxassetid://122239345709797",
+			Walk = "rbxassetid://75230655685008",
+			Attack = "rbxassetid://133456423010750",
+			Wait = "rbxassetid://83934552353758",
+			ShootWalk = "rbxassetid://82388594283709",
+			RangedAttack = "rbxassetid://76185872009286",
+		}
+	},
+
+	Magier = {
+		Name = "Magier",
+		Model = "Magier",
+		Type = "Hybrid",
+		Cost = 225,  -- Increased from 90
+		Epoch = "Medieval",
+		ProjectileModel = "FireBall",
+
+		Stats = {
+			HP = 130,  -- Increased from 110
+			Damage = 30,  -- Increased from 18
+			AttackSpeed = 2.0,  -- Unchanged
+			MoveSpeed = 4,  -- Unchanged
+			AttackRange = 35,
+			MeleeRange = 8
+		},
+
+		Size = 4,
+		Spacing = 8,
+		HeightOffset = 0,
+		ModelScale = 1.8,
+
+		Animations = {
+			BaseIdle = "rbxassetid://80543649401408",
+			Walk = "rbxassetid://117228899386588",
+			Attack = "rbxassetid://99165113561969",
+			Wait = "rbxassetid://104186162268956",
+			ShootWalk = "rbxassetid://115494893657482",
+			RangedAttack = "rbxassetid://115091461573272",
+		}
+	},
+
+	-- ===== INDUSTRIAL =====
+	Guard = {
+		Name = "Guard",
+		Model = "Guard",
+		Type = "Melee",
+		Cost = 200,  -- Increased from 80
+		Epoch = "Industrial",
+
+		Stats = {
+			HP = 200,  -- Increased from 140
+			Damage = 35,  -- Increased from 18
+			AttackSpeed = 1.4,  -- Unchanged
+			MoveSpeed = 4,  -- Unchanged
+			AttackRange = 8
+		},
+
+		Size = 5,
+		Spacing = 8,
+		HeightOffset = 0,
+		ModelScale = 1.8,
+
+		Animations = {
+			BaseIdle = "rbxassetid://104656550581635",
+			Walk = "rbxassetid://93090189787860",
+			Attack = "rbxassetid://70589606345113",
+			Wait = "rbxassetid://116743024253183",
+		}
+	},
+
+	Waechter = {
+		Name = "Wächter",
+		Model = "Wächter",
+		Type = "Hybrid",
+		Cost = 300,  -- Increased from 100
+		Epoch = "Industrial",
+		ProjectileModel = "Kugel",
+		ProjectileScale = 4,
+
+		ShootWalkProjectileModel = "LilaBeam",
+		ShootWalkProjectileScale = 0.5,
+
+		Stats = {
+			HP = 180,  -- Increased from 120
+			Damage = 28,  -- Increased from 15
+			AttackSpeed = 1.4,  -- Unchanged
+			MoveSpeed = 4,  -- Unchanged
+			AttackRange = 35,
+			MeleeRange = 8
+		},
+
+		Size = 5,
+		Spacing = 8,
+		HeightOffset = 0,
+		ModelScale = 1.8,
+
+		Animations = {
+			BaseIdle = "rbxassetid://125444213232101",
+			Walk = "rbxassetid://96682275151898",
+			Attack = "rbxassetid://138496767078384",
+			Wait = "rbxassetid://121700885980583",
+			ShootWalk = "rbxassetid://116691545565639",
+			RangedAttack = "rbxassetid://95634976808729",
+		}
+	},
+
+	Professor = {
+		Name = "Professor",
+		Model = "Professor",
+		Type = "Hybrid",
+		Cost = 400,  -- Increased from 120
+		Epoch = "Industrial",
+
+		ProjectileModel = "Granate",
+		ProjectileScale = 2.5,
+
+		SpecialAttack = "Flamethrower",
+
+		Stats = {
+			HP = 190,  -- Increased from 130
+			Damage = 40,  -- Increased from 20
+			AttackSpeed = 2.5,  -- Unchanged
+			MoveSpeed = 4,  -- Unchanged
+			AttackRange = 40,
+			MeleeRange = 8
+		},
+
+		Size = 4,
+		Spacing = 8,
+		HeightOffset = 0,
+		ModelScale = 1.8,
+
+		Animations = {
+			BaseIdle = "rbxassetid://112634594852770",
+			Walk = "rbxassetid://101140615112532",
+			Attack = "rbxassetid://114646562345443",
+			Wait = "rbxassetid://86334769930160",
+			RangedAttack = "rbxassetid://120434958543346",
+			AttackPart2 = "rbxassetid://89380834993249",
+			ShootWalk = "rbxassetid://118115987936803",
+			ShootWalkPart2 = "rbxassetid://87099242067870",
+		}
+	},
+
+	-- ===== MODERN =====
+	ModernNahkaempfer = {
+		Name = "Modern Nahkämpfer",
+		Model = "ModernNahkämpfer",
+		Type = "Melee",
+		Cost = 350,  -- Increased from 100
+		Epoch = "Modern",
+
+		Stats = {
+			HP = 280,  -- Increased from 160
+			Damage = 50,  -- Increased from 22
+			AttackSpeed = 1.2,  -- Unchanged
+			MoveSpeed = 4,  -- Unchanged
+			AttackRange = 8
+		},
+
+		Size = 4,
+		Spacing = 8,
+		HeightOffset = 0,
+		ModelScale = 1.8,
+
+		Animations = {
+			BaseIdle = "rbxassetid://102990324753595",
+			Walk = "rbxassetid://111293917917259",
+			Attack = "rbxassetid://85697618563727",
+			Wait = "rbxassetid://118421955923625",
+		}
+	},
+
+	UziSoldier = {
+		Name = "Uzi Soldier",
+		Model = "UziSoldier",
+		Type = "Hybrid",
+		Cost = 500,  -- Increased from 125
+		Epoch = "Modern",
+		ProjectileModel = "Kugel",
+		ProjectileScale = 4,
+
+		Stats = {
+			HP = 240,  -- Increased from 140
+			Damage = 35,  -- Increased from 18
+			AttackSpeed = 0.8,  -- Unchanged - rapid fire
+			MoveSpeed = 4,  -- Unchanged
+			AttackRange = 35,
+			MeleeRange = 8
+		},
+
+		Size = 4,
+		Spacing = 8,
+		HeightOffset = 0,
+		ModelScale = 1.8,
+
+		Animations = {
+			BaseIdle = "rbxassetid://137717537948039",
+			Walk = "rbxassetid://86230843228277",
+			Attack = "rbxassetid://101868657762326",
+			Wait = "rbxassetid://84712003130682",
+			ShootWalk = "rbxassetid://110846990533515",
+			RangedAttack = "rbxassetid://117766749053258",
+		}
+	},
+
+
+	-- ===== FUTURE =====
+	RobotNah = {
+		Name = "Robot Nahkämpfer",
+		Model = "RobotNah",
+		Type = "Melee",
+		Cost = 600,  -- Increased from 150
+		Epoch = "Future",
+
+		Stats = {
+			HP = 400,  -- Increased from 200
+			Damage = 75,  -- Increased from 30
+			AttackSpeed = 1.0,  -- Unchanged
+			MoveSpeed = 4,  -- Unchanged
+			AttackRange = 8
+		},
+
+		Size = 5,
+		Spacing = 8,
+		HeightOffset = 1,
+		ModelScale = 1.8,
+
+		Animations = {
+			BaseIdle = "rbxassetid://72345985912380",
+			Walk = "rbxassetid://90310344126824",
+			Attack = "rbxassetid://101483180986756",
+			Wait = "rbxassetid://100575473732628",
+		}
+	},
+
+	RobotGun = {
+		Name = "Robot Schütze",
+		Model = "RobotGun",
+		Type = "Hybrid",
+		Cost = 800,  -- Increased from 180
+		Epoch = "Future",
+		ProjectileModel = "LaserRed",
+		ProjectileRotation = Vector3.new(0, 0, 0),
+		ProjectileScale = 0.8,
+
+		Stats = {
+			HP = 300,  -- Increased from 150
+			Damage = 60,  -- Increased from 25
+			AttackSpeed = 1.5,  -- Unchanged
+			MoveSpeed = 4,  -- Unchanged
+			AttackRange = 50,
+			MeleeRange = 6
+		},
+
+		Size = 4,
+		Spacing = 8,
+		HeightOffset = 0.5,
+		ModelScale = 1.8,
+
+		Animations = {
+			BaseIdle = "rbxassetid://93001269744375",
+			Walk = "rbxassetid://129385735405470",
+			Attack = "rbxassetid://136165405727241",
+			Wait = "rbxassetid://116739037335150",
+			ShootWalk = "rbxassetid://96473096790780",
+			RangedAttack = "rbxassetid://110893380346009",
+		}
+	},
+
+	BadAss = {
+		Name = "BadAss",
+		Model = "BadAss",
+		Type = "Hybrid",
+		Cost = 1200,  -- Increased from 250
+		Epoch = "Future",
+		ProjectileModel = "LaserRed",
+
+		Stats = {
+			HP = 500,  -- Increased from 250
+			Damage = 100,  -- Increased from 40
+			AttackSpeed = 2.0,  -- Unchanged
+			MoveSpeed = 4,  -- Unchanged
+			AttackRange = 40,
+			MeleeRange = 10
+		},
+
+		Size = 8,
+		Spacing = 8,
+		HeightOffset = 1.5,
+		ModelScale = 1.8,
+
+		Animations = {
+			BaseIdle = "rbxassetid://96601335961903",
+			Walk = "rbxassetid://81670756725660",
+			Attack = "rbxassetid://125857371639572",
+			Wait = "rbxassetid://94152412652716",
+			ShootWalk = "rbxassetid://134949024971208",
+			RangedAttack = "rbxassetid://111756260245306",
+		}
+	},
+
+	ZukunftsPanzer = {
+		Name = "Zukunfts Panzer",
+		Model = "ZukunftsPanzer",
+		Type = "Hybrid",
+		Cost = 2000,  -- Increased from 350
+		Epoch = "Future",
+		ProjectileModel = "LaserRed",
+
+		Stats = {
+			HP = 800,  -- Increased from 400
+			Damage = 150,  -- Increased from 60
+			AttackSpeed = 3.0,  -- Unchanged
+			MoveSpeed = 4,  -- Unchanged
+			AttackRange = 60,
+			MeleeRange = 12
+		},
+
+		Size = 15,
+		Spacing = 12,
+		HeightOffset = 1,
+		ModelScale = 1.8,
+
+		Animations = {
+			BaseIdle = "rbxassetid://81834948516496",
+			Walk = "rbxassetid://123966485895321",
+			Attack = "rbxassetid://91916177696210",
+			Wait = "rbxassetid://83782077521729",
+			ShootWalk = "rbxassetid://115467461542834",
+			RangedAttack = "rbxassetid://91916177696210",
+		}
+	}
+}
+
+return SoldierData

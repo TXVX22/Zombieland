@@ -1,0 +1,882 @@
+-- MainGameClient.lua
+-- Platzierung: StarterPlayer/StarterPlayerScripts/MainGameClient (LocalScript)
+
+print("[MainGameClient] Starting initialization...")
+
+-- Services
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+local SoundService = game:GetService("SoundService")
+
+-- Player
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+local mouse = player:GetMouse()
+
+-- Modules
+local GameConfig = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("GameConfig"))
+
+-- Remotes (warten auf Server)
+local Remotes = ReplicatedStorage:WaitForChild("Remotes", 30)
+local WeaponFireRemote = Remotes:WaitForChild("WeaponFire", 10)
+local WeaponReloadRemote = Remotes:WaitForChild("WeaponReload", 10)
+local WeaponEquipRemote = Remotes:WaitForChild("WeaponEquip", 10)
+local ZombieAttackRemote = Remotes:WaitForChild("ZombieAttack", 10)
+local GameStateRemote = Remotes:WaitForChild("GameState", 10)
+
+-- ═══════════════════════════════════════════════════════════════
+-- CLIENT STATE
+-- ═══════════════════════════════════════════════════════════════
+
+local ClientState = {
+	IsFiring = false,
+	SelectedWeapon = 1,
+	CurrentAnimationType = "Pistol",
+	CharacterModel = "Denis",
+	CurrentIdleAnim = nil,
+	CurrentWalkAnim = nil,
+	IsReloading = false
+}
+
+-- Animation Tracks
+local AnimationTracks = {}
+
+-- Forward Declarations (damit Funktionen vor Definition aufgerufen werden koennen)
+local SetupMorphAnimations
+local CleanupMorphAnimations
+
+-- ═══════════════════════════════════════════════════════════════
+-- SHOOTING SYSTEM
+-- ═══════════════════════════════════════════════════════════════
+
+function GetMouseTarget()
+	local camera = workspace.CurrentCamera
+	if not camera then return nil end
+
+	local mousePos = UserInputService:GetMouseLocation()
+	local ray = camera:ViewportPointToRay(mousePos.X, mousePos.Y)
+
+	local raycastParams = RaycastParams.new()
+	raycastParams.FilterType = Enum.RaycastFilterType.Exclude
+
+	local character = player.Character
+	if character then
+		raycastParams.FilterDescendantsInstances = {character}
+	end
+
+	local result = workspace:Raycast(ray.Origin, ray.Direction * 1000, raycastParams)
+
+	if result then
+		return result.Position
+	else
+		return ray.Origin + ray.Direction * 500
+	end
+end
+
+function StartFiring()
+	if ClientState.IsFiring then return end
+	if ClientState.IsReloading then return end
+
+	ClientState.IsFiring = true
+
+	local weaponConfig = GameConfig.Weapons[ClientState.SelectedWeapon]
+	if not weaponConfig then return end
+
+	if weaponConfig.Automatic then
+		-- Automatische Waffe
+		WeaponFireRemote:FireServer(GetMouseTarget(), true)
+	else
+		-- Einzelschuss
+		WeaponFireRemote:FireServer(GetMouseTarget(), false)
+		ClientState.IsFiring = false
+	end
+
+	-- Muzzle Flash Effekt
+	PlayMuzzleFlash()
+end
+
+function StopFiring()
+	if not ClientState.IsFiring then return end
+
+	ClientState.IsFiring = false
+
+	local weaponConfig = GameConfig.Weapons[ClientState.SelectedWeapon]
+	if weaponConfig and weaponConfig.Automatic then
+		WeaponFireRemote:FireServer(nil, false)
+	end
+end
+
+function Reload()
+	if ClientState.IsReloading then return end
+
+	ClientState.IsReloading = true
+	WeaponReloadRemote:FireServer()
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- VISUAL EFFECTS
+-- ═══════════════════════════════════════════════════════════════
+
+function PlayMuzzleFlash()
+	local character = player.Character
+	if not character then return end
+
+	-- Finde Waffe
+	local weapon = nil
+	for _, child in pairs(character:GetChildren()) do
+		if child:GetAttribute("IsWeapon") then
+			weapon = child
+			break
+		end
+	end
+
+	if not weapon then return end
+
+	-- Finde Muzzle Part oder erstelle temporären Flash
+	local muzzlePart = weapon:FindFirstChild("Muzzle") or weapon.PrimaryPart
+	if not muzzlePart then return end
+
+	-- Erstelle Flash
+	local flash = Instance.new("Part")
+	flash.Size = Vector3.new(0.5, 0.5, 0.5)
+	flash.Transparency = 0.5
+	flash.Material = Enum.Material.Neon
+	flash.Color = Color3.fromRGB(255, 200, 100)
+	flash.CanCollide = false
+	flash.Anchored = true
+	flash.Position = muzzlePart.Position + muzzlePart.CFrame.LookVector * 1
+	flash.Parent = workspace
+
+	-- Licht
+	local light = Instance.new("PointLight")
+	light.Color = Color3.fromRGB(255, 200, 100)
+	light.Brightness = 5
+	light.Range = 10
+	light.Parent = flash
+
+	-- Entferne nach kurzer Zeit
+	game:GetService("Debris"):AddItem(flash, 0.05)
+end
+
+function CreateHitEffect(position, isZombie, killed)
+	-- Hit Marker
+	local hitMarker = Instance.new("Part")
+	hitMarker.Size = Vector3.new(0.3, 0.3, 0.3)
+	hitMarker.Shape = Enum.PartType.Ball
+	hitMarker.Transparency = 0.5
+	hitMarker.Material = Enum.Material.Neon
+	hitMarker.CanCollide = false
+	hitMarker.Anchored = true
+	hitMarker.Position = position
+
+	if isZombie then
+		if killed then
+			hitMarker.Color = Color3.fromRGB(255, 50, 50)
+			hitMarker.Size = Vector3.new(0.5, 0.5, 0.5)
+		else
+			hitMarker.Color = Color3.fromRGB(255, 200, 100)
+		end
+	else
+		hitMarker.Color = Color3.fromRGB(150, 150, 150)
+	end
+
+	hitMarker.Parent = workspace
+
+	-- Animation
+	TweenService:Create(
+		hitMarker,
+		TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+		{Size = Vector3.new(0.1, 0.1, 0.1), Transparency = 1}
+	):Play()
+
+	game:GetService("Debris"):AddItem(hitMarker, 0.3)
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- ANIMATION SYSTEM
+-- ═══════════════════════════════════════════════════════════════
+
+function LoadAnimations()
+	local character = player.Character
+	if not character then return end
+
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	if not humanoid then return end
+
+	local animator = humanoid:FindFirstChildOfClass("Animator")
+	if not animator then
+		animator = Instance.new("Animator")
+		animator.Parent = humanoid
+	end
+
+	-- Stoppe alte Animationen
+	for _, track in pairs(AnimationTracks) do
+		if track then
+			track:Stop()
+		end
+	end
+	AnimationTracks = {}
+
+	-- Lade Animationen basierend auf Charakter und Waffentyp
+	local characterModel = character:GetAttribute("CharacterModel") or ClientState.CharacterModel
+	local animationType = ClientState.CurrentAnimationType
+
+	local animData = GameConfig.CharacterAnimations[characterModel]
+	if not animData then
+		warn("[MainGameClient] No animations for character: " .. characterModel)
+		return
+	end
+
+	local typeAnims = animData[animationType]
+	if not typeAnims then
+		warn("[MainGameClient] No animations for type: " .. animationType)
+		return
+	end
+
+	-- Erstelle Animation Instances
+	if typeAnims.Idle then
+		local idleAnim = Instance.new("Animation")
+		idleAnim.AnimationId = typeAnims.Idle
+		AnimationTracks.Idle = animator:LoadAnimation(idleAnim)
+		AnimationTracks.Idle.Priority = Enum.AnimationPriority.Idle
+		AnimationTracks.Idle.Looped = true
+	end
+
+	if typeAnims.Walk then
+		local walkAnim = Instance.new("Animation")
+		walkAnim.AnimationId = typeAnims.Walk
+		AnimationTracks.Walk = animator:LoadAnimation(walkAnim)
+		AnimationTracks.Walk.Priority = Enum.AnimationPriority.Movement
+		AnimationTracks.Walk.Looped = true
+	end
+
+	-- Starte Idle Animation
+	if AnimationTracks.Idle then
+		AnimationTracks.Idle:Play()
+		ClientState.CurrentIdleAnim = AnimationTracks.Idle
+	end
+
+	print("[MainGameClient] Loaded animations for " .. characterModel .. " - " .. animationType)
+end
+
+function UpdateMovementAnimation()
+	local character = player.Character
+	if not character then return end
+
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	if not humanoid then return end
+
+	local rootPart = character:FindFirstChild("HumanoidRootPart")
+	if not rootPart then return end
+
+	local velocity = rootPart.AssemblyLinearVelocity
+	local horizontalSpeed = Vector3.new(velocity.X, 0, velocity.Z).Magnitude
+
+	if horizontalSpeed > 1 then
+		-- Walking
+		if AnimationTracks.Walk and not AnimationTracks.Walk.IsPlaying then
+			if AnimationTracks.Idle then
+				AnimationTracks.Idle:Stop(0.2)
+			end
+			AnimationTracks.Walk:Play(0.2)
+		end
+	else
+		-- Idle
+		if AnimationTracks.Idle and not AnimationTracks.Idle.IsPlaying then
+			if AnimationTracks.Walk then
+				AnimationTracks.Walk:Stop(0.2)
+			end
+			AnimationTracks.Idle:Play(0.2)
+		end
+	end
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- ZOMBIE EFFECTS
+-- ═══════════════════════════════════════════════════════════════
+
+function PlayZombieAttackAnimation(zombie, attackType)
+	if not zombie or not zombie.Parent then return end
+
+	local humanoid = zombie:FindFirstChildOfClass("Humanoid")
+	if not humanoid then return end
+
+	local animator = humanoid:FindFirstChildOfClass("Animator")
+	if not animator then
+		animator = Instance.new("Animator")
+		animator.Parent = humanoid
+	end
+
+	local zombieType = zombie:GetAttribute("ZombieType")
+	if not zombieType then return end
+
+	local zombieConfig = GameConfig.Zombies[zombieType]
+	if not zombieConfig or not zombieConfig.Animations then return end
+
+	local animId = nil
+	if attackType == "Melee" then
+		animId = zombieConfig.Animations.Melee
+	elseif attackType == "Range" then
+		animId = zombieConfig.Animations.Range
+	end
+
+	if animId then
+		local anim = Instance.new("Animation")
+		anim.AnimationId = animId
+		local track = animator:LoadAnimation(anim)
+		track:Play()
+	end
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- INPUT HANDLING
+-- ═══════════════════════════════════════════════════════════════
+
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+	if gameProcessed then return end
+
+	-- Schießen (Linke Maustaste)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 then
+		StartFiring()
+	end
+
+	-- Nachladen (R)
+	if input.KeyCode == Enum.KeyCode.R then
+		Reload()
+	end
+
+	-- Waffen wechseln (1-9) - wird in GameUI behandelt
+end)
+
+UserInputService.InputEnded:Connect(function(input, gameProcessed)
+	-- Aufhören zu schießen
+	if input.UserInputType == Enum.UserInputType.MouseButton1 then
+		StopFiring()
+	end
+end)
+
+-- Touch Controls für Mobile
+if UserInputService.TouchEnabled then
+	-- Schieß-Button wird in GameUI erstellt
+	local function CreateMobileShootButton()
+		local shootButton = Instance.new("ImageButton")
+		shootButton.Name = "ShootButton"
+		shootButton.Size = UDim2.new(0, 100, 0, 100)
+		shootButton.Position = UDim2.new(1, -130, 1, -150)
+		shootButton.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+		shootButton.BackgroundTransparency = 0.3
+		shootButton.Image = ""
+		shootButton.Parent = playerGui:WaitForChild("ZombielandUI")
+
+		local corner = Instance.new("UICorner")
+		corner.CornerRadius = UDim.new(1, 0)
+		corner.Parent = shootButton
+
+		local label = Instance.new("TextLabel")
+		label.Size = UDim2.new(1, 0, 1, 0)
+		label.BackgroundTransparency = 1
+		label.Text = "FIRE"
+		label.TextColor3 = Color3.new(1, 1, 1)
+		label.TextScaled = true
+		label.Font = Enum.Font.GothamBold
+		label.Parent = shootButton
+
+		shootButton.MouseButton1Down:Connect(function()
+			StartFiring()
+		end)
+
+		shootButton.MouseButton1Up:Connect(function()
+			StopFiring()
+		end)
+
+		-- Reload Button
+		local reloadButton = Instance.new("TextButton")
+		reloadButton.Name = "ReloadButton"
+		reloadButton.Size = UDim2.new(0, 70, 0, 40)
+		reloadButton.Position = UDim2.new(1, -200, 1, -80)
+		reloadButton.BackgroundColor3 = Color3.fromRGB(100, 100, 200)
+		reloadButton.BackgroundTransparency = 0.3
+		reloadButton.Text = "RELOAD"
+		reloadButton.TextColor3 = Color3.new(1, 1, 1)
+		reloadButton.TextScaled = true
+		reloadButton.Font = Enum.Font.GothamBold
+		reloadButton.Parent = playerGui:WaitForChild("ZombielandUI")
+
+		local reloadCorner = Instance.new("UICorner")
+		reloadCorner.CornerRadius = UDim.new(0, 10)
+		reloadCorner.Parent = reloadButton
+
+		reloadButton.MouseButton1Click:Connect(function()
+			Reload()
+		end)
+	end
+
+	task.spawn(function()
+		task.wait(2) -- Warte auf UI
+		CreateMobileShootButton()
+	end)
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- REMOTE EVENT HANDLERS
+-- ═══════════════════════════════════════════════════════════════
+
+-- Weapon Equip Handler
+WeaponEquipRemote.OnClientEvent:Connect(function(weaponSlot, animationType, characterModel)
+	ClientState.SelectedWeapon = weaponSlot
+	ClientState.CurrentAnimationType = animationType
+	ClientState.CharacterModel = characterModel
+
+	local character = player.Character
+	if character then
+		-- Pruefe ob Morph aktiv ist
+		local morphModel = nil
+		for _, child in ipairs(character:GetChildren()) do
+			if child:IsA("Model") and child.Name:match("^ServerMorph_") then
+				morphModel = child
+				break
+			end
+		end
+
+		if morphModel then
+			-- Morph aktiv - lade Morph-Animationen mit neuem Waffentyp
+			print("[MainGameClient] Updating morph animations for weapon:", animationType)
+			SetupMorphAnimations(character, animationType)
+		else
+			-- Kein Morph - nutze Standard-Animationen
+			LoadAnimations()
+		end
+	end
+
+	print("[MainGameClient] Equipped weapon slot " .. weaponSlot .. " (" .. animationType .. ")")
+end)
+
+-- Weapon Fire Handler (Ammo Update)
+WeaponFireRemote.OnClientEvent:Connect(function(currentAmmo, maxAmmo)
+	-- UI Update wird von GameUI behandelt
+	ClientState.IsReloading = false
+end)
+
+-- Weapon Reload Handler
+WeaponReloadRemote.OnClientEvent:Connect(function(reloadTime)
+	ClientState.IsReloading = true
+
+	-- Zeige Reload-Animation/Feedback
+	print("[MainGameClient] Reloading... " .. reloadTime .. "s")
+
+	task.delay(reloadTime, function()
+		ClientState.IsReloading = false
+	end)
+end)
+
+-- Weapon Hit Handler
+local WeaponHitRemote = Remotes:WaitForChild("WeaponHit")
+WeaponHitRemote.OnClientEvent:Connect(function(position, isZombie, killed)
+	CreateHitEffect(position, isZombie, killed)
+end)
+
+-- Zombie Attack Handler
+ZombieAttackRemote.OnClientEvent:Connect(function(zombie, attackType)
+	PlayZombieAttackAnimation(zombie, attackType)
+end)
+
+-- Game State Handler
+GameStateRemote.OnClientEvent:Connect(function(state, data1, data2, data3)
+	if state == "GameStarted" then
+		print("[MainGameClient] Game started!")
+	elseif state == "GameEnded" then
+		print("[MainGameClient] Game ended! Reason: " .. tostring(data1))
+		print("[MainGameClient] Total Kills: " .. tostring(data2) .. " | Waves: " .. tostring(data3))
+	elseif state == "Sync" then
+		-- Sync Game State
+	end
+end)
+
+-- ═══════════════════════════════════════════════════════════════
+-- MORPH ANIMATION SYSTEM (wie im Lobby MainGameHybridMorphClient)
+-- ═══════════════════════════════════════════════════════════════
+
+local MorphAnimationData = {
+	controller = nil,
+	animator = nil,
+	walkTrack = nil,
+	idleTrack = nil,
+	connection = nil,
+	currentSpeed = 1.0,
+	targetSpeed = 1.0
+}
+
+local WALK_SPEED_MULTIPLIER = 1.0
+local MIN_WALK_SPEED = 0.5
+local MAX_WALK_SPEED = 2.0
+local SPEED_SMOOTHING = 0.25
+local MOVEMENT_THRESHOLD = 0.5
+
+CleanupMorphAnimations = function()
+	if MorphAnimationData.connection then
+		MorphAnimationData.connection:Disconnect()
+		MorphAnimationData.connection = nil
+	end
+
+	if MorphAnimationData.walkTrack then
+		MorphAnimationData.walkTrack:Stop()
+		MorphAnimationData.walkTrack:Destroy()
+		MorphAnimationData.walkTrack = nil
+	end
+
+	if MorphAnimationData.idleTrack then
+		MorphAnimationData.idleTrack:Stop()
+		MorphAnimationData.idleTrack:Destroy()
+		MorphAnimationData.idleTrack = nil
+	end
+
+	if MorphAnimationData.controller and MorphAnimationData.controller.Parent then
+		MorphAnimationData.controller:Destroy()
+		MorphAnimationData.controller = nil
+	end
+
+	MorphAnimationData.animator = nil
+end
+
+SetupMorphAnimations = function(character, weaponType)
+	-- Bestimme den Waffentyp - nutze uebergebenen oder aktuellen ClientState
+	local animationType = weaponType or ClientState.CurrentAnimationType or "Pistol"
+
+	CleanupMorphAnimations()
+
+	-- Finde das Morph-Model
+	local morphModel = nil
+	for _, child in ipairs(character:GetChildren()) do
+		if child:IsA("Model") and child.Name:match("^ServerMorph_") then
+			morphModel = child
+			break
+		end
+	end
+
+	if not morphModel then
+		print("[MainGameClient] No morph model found, using default animations")
+		return false
+	end
+
+	local modelName = character:GetAttribute("CharacterModel") or "Denis"
+	print("[MainGameClient] Setting up morph animations for:", modelName, "with weapon:", animationType)
+
+	-- Deaktiviere das Standard Animate Script
+	local animateScript = character:FindFirstChild("Animate")
+	if animateScript then
+		animateScript.Disabled = true
+		print("[MainGameClient] Disabled default Animate script")
+	end
+
+	-- Suche nach bestehendem AnimationController oder erstelle neuen
+	local animController = morphModel:FindFirstChild("ClientAnimationController")
+	local morphAnimator = nil
+
+	if animController then
+		-- Nutze bestehenden Controller, stoppe nur alte Animationen
+		morphAnimator = animController:FindFirstChildOfClass("Animator")
+		if morphAnimator then
+			for _, track in pairs(morphAnimator:GetPlayingAnimationTracks()) do
+				track:Stop(0)
+			end
+		end
+	else
+		-- Erstelle neuen AnimationController im Morph-Model
+		animController = Instance.new("AnimationController")
+		animController.Name = "ClientAnimationController"
+		animController.Parent = morphModel
+
+		morphAnimator = Instance.new("Animator")
+		morphAnimator.Parent = animController
+	end
+
+	if not morphAnimator then
+		morphAnimator = Instance.new("Animator")
+		morphAnimator.Parent = animController
+	end
+
+	MorphAnimationData.controller = animController
+	MorphAnimationData.animator = morphAnimator
+
+	-- Hole Animation-IDs aus GameConfig basierend auf aktuellem Waffentyp
+	local animData = GameConfig.CharacterAnimations and GameConfig.CharacterAnimations[modelName]
+	local weaponAnims = animData and animData[animationType]
+
+	-- Fallback: Wenn keine Animationen fuer diesen Waffentyp, versuche Pistol
+	if not weaponAnims and animData then
+		weaponAnims = animData["Pistol"]
+		print("[MainGameClient] No animations for " .. animationType .. ", falling back to Pistol")
+	end
+
+	-- Fallback Animation IDs (generische Animationen)
+	local walkAnimId = weaponAnims and weaponAnims.Walk or "rbxassetid://913402848"
+	local idleAnimId = weaponAnims and weaponAnims.Idle or "rbxassetid://913372852"
+
+	print("[MainGameClient] Loading animations - Walk:", walkAnimId, "Idle:", idleAnimId)
+
+	-- Lade Walk Animation
+	local walkAnim = Instance.new("Animation")
+	walkAnim.AnimationId = walkAnimId
+	walkAnim.Name = "WalkAnimation"
+
+	local success1, walkTrack = pcall(function()
+		return morphAnimator:LoadAnimation(walkAnim)
+	end)
+
+	if success1 and walkTrack then
+		walkTrack.Priority = Enum.AnimationPriority.Movement
+		walkTrack.Looped = true
+		MorphAnimationData.walkTrack = walkTrack
+		print("[MainGameClient] Walk animation loaded:", walkAnimId)
+	else
+		warn("[MainGameClient] Failed to load walk animation")
+	end
+
+	-- Lade Idle Animation
+	local idleAnim = Instance.new("Animation")
+	idleAnim.AnimationId = idleAnimId
+	idleAnim.Name = "IdleAnimation"
+
+	local success2, idleTrack = pcall(function()
+		return morphAnimator:LoadAnimation(idleAnim)
+	end)
+
+	if success2 and idleTrack then
+		idleTrack.Priority = Enum.AnimationPriority.Idle
+		idleTrack.Looped = true
+		MorphAnimationData.idleTrack = idleTrack
+		print("[MainGameClient] Idle animation loaded:", idleAnimId)
+
+		-- Starte Idle Animation
+		idleTrack:Play()
+	else
+		warn("[MainGameClient] Failed to load idle animation")
+	end
+
+	-- Animation Control Loop
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	if not humanoid then return false end
+
+	local lastState = "idle"
+	local velocityHistory = {}
+
+	MorphAnimationData.connection = RunService.Heartbeat:Connect(function()
+		if not character or not character.Parent then
+			CleanupMorphAnimations()
+			return
+		end
+
+		local rootPart = character:FindFirstChild("HumanoidRootPart")
+		if not rootPart then return end
+
+		local velocity = rootPart.AssemblyLinearVelocity or rootPart.Velocity
+		local horizontalVelocity = Vector3.new(velocity.X, 0, velocity.Z)
+		local speed = horizontalVelocity.Magnitude
+
+		-- Velocity Averaging fuer smoothere Uebergaenge
+		table.insert(velocityHistory, speed)
+		if #velocityHistory > 3 then
+			table.remove(velocityHistory, 1)
+		end
+
+		local avgSpeed = 0
+		for _, v in ipairs(velocityHistory) do
+			avgSpeed = avgSpeed + v
+		end
+		avgSpeed = avgSpeed / #velocityHistory
+
+		local humanoidState = humanoid:GetState()
+		local inAir = humanoidState == Enum.HumanoidStateType.Freefall or
+			humanoidState == Enum.HumanoidStateType.Flying or
+			humanoidState == Enum.HumanoidStateType.Jumping
+
+		if avgSpeed > MOVEMENT_THRESHOLD and not inAir then
+			if lastState ~= "walk" then
+				if MorphAnimationData.idleTrack and MorphAnimationData.idleTrack.IsPlaying then
+					MorphAnimationData.idleTrack:Stop(0.1)
+				end
+				if MorphAnimationData.walkTrack then
+					MorphAnimationData.walkTrack:Play(0.1)
+				end
+				lastState = "walk"
+			end
+
+			-- Animation Speed basierend auf Bewegung
+			if MorphAnimationData.walkTrack and MorphAnimationData.walkTrack.IsPlaying then
+				local humanoidWalkSpeed = humanoid.WalkSpeed or 16
+				local targetSpeed = (avgSpeed / humanoidWalkSpeed) * WALK_SPEED_MULTIPLIER
+				targetSpeed = math.clamp(targetSpeed, MIN_WALK_SPEED, MAX_WALK_SPEED)
+
+				MorphAnimationData.targetSpeed = targetSpeed
+				MorphAnimationData.currentSpeed = MorphAnimationData.currentSpeed +
+					(MorphAnimationData.targetSpeed - MorphAnimationData.currentSpeed) * SPEED_SMOOTHING
+
+				MorphAnimationData.walkTrack:AdjustSpeed(MorphAnimationData.currentSpeed)
+			end
+		elseif avgSpeed <= MOVEMENT_THRESHOLD and not inAir then
+			if lastState ~= "idle" then
+				if MorphAnimationData.walkTrack and MorphAnimationData.walkTrack.IsPlaying then
+					MorphAnimationData.walkTrack:Stop(0.1)
+				end
+				if MorphAnimationData.idleTrack then
+					MorphAnimationData.idleTrack:Play(0.1)
+				end
+				lastState = "idle"
+				MorphAnimationData.currentSpeed = 1.0
+				MorphAnimationData.targetSpeed = 1.0
+			end
+		else
+			-- In Air
+			if MorphAnimationData.walkTrack and MorphAnimationData.walkTrack.IsPlaying then
+				MorphAnimationData.walkTrack:Stop(0.2)
+			end
+			if MorphAnimationData.idleTrack and MorphAnimationData.idleTrack.IsPlaying then
+				MorphAnimationData.idleTrack:Stop(0.2)
+			end
+			lastState = "air"
+		end
+	end)
+
+	print("[MainGameClient] Morph animation system activated")
+	return true
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- CHARACTER SETUP
+-- ═══════════════════════════════════════════════════════════════
+
+player.CharacterAdded:Connect(function(character)
+	print("[MainGameClient] Character spawned")
+
+	-- Warte auf vollstaendige Initialisierung und Morph
+	task.wait(1.5)
+
+	-- Versuche Morph-Animationen zu laden
+	local morphSetupSuccess = SetupMorphAnimations(character)
+
+	if not morphSetupSuccess then
+		-- Fallback: Standard Animationen laden
+		LoadAnimations()
+
+		-- Movement Animation Loop nur wenn kein Morph
+		local movementConnection
+		movementConnection = RunService.Heartbeat:Connect(function()
+			if not character or not character.Parent then
+				movementConnection:Disconnect()
+				return
+			end
+			UpdateMovementAnimation()
+		end)
+	end
+end)
+
+-- Initial Setup wenn Character bereits existiert
+if player.Character then
+	task.spawn(function()
+		task.wait(1.5)
+		local morphSetupSuccess = SetupMorphAnimations(player.Character)
+		if not morphSetupSuccess then
+			LoadAnimations()
+		end
+	end)
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- CROSSHAIR UPDATE (Maus folgen)
+-- ═══════════════════════════════════════════════════════════════
+
+RunService.RenderStepped:Connect(function()
+	-- Crosshair bleibt in der Mitte (wird von GameUI gehandhabt)
+
+	-- Optional: Charakter zur Maus drehen
+	local character = player.Character
+	if not character then return end
+
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	local rootPart = character:FindFirstChild("HumanoidRootPart")
+
+	if humanoid and rootPart and humanoid.Health > 0 then
+		local target = GetMouseTarget()
+		if target then
+			-- Nur Y-Rotation zum Ziel
+			local lookAt = Vector3.new(target.X, rootPart.Position.Y, target.Z)
+			-- Roblox handhabt das automatisch bei Third Person
+		end
+	end
+end)
+
+-- ═══════════════════════════════════════════════════════════════
+-- PROJECTILE VISUALIZATION
+-- ═══════════════════════════════════════════════════════════════
+
+local ProjectileFiredRemote = Remotes:WaitForChild("ProjectileFired")
+ProjectileFiredRemote.OnClientEvent:Connect(function(startPos, direction, projectileType)
+	if projectileType == "Fireball" then
+		-- Visueller Feuerball (bereits vom Server erstellt, aber für Effekte)
+		-- Sound abspielen
+		local fireSound = Instance.new("Sound")
+		fireSound.SoundId = "rbxassetid://5775439929" -- Fire sound
+		fireSound.Volume = 0.5
+		fireSound.Parent = workspace
+		fireSound:Play()
+		game:GetService("Debris"):AddItem(fireSound, 3)
+	end
+end)
+
+-- ═══════════════════════════════════════════════════════════════
+-- FENCE BUILD VISUALIZATION
+-- ═══════════════════════════════════════════════════════════════
+
+local FenceBuildCompleteRemote = Remotes:WaitForChild("FenceBuildComplete")
+FenceBuildCompleteRemote.OnClientEvent:Connect(function(fenceName, builderName)
+	print("[MainGameClient] Fence built: " .. fenceName .. " by " .. builderName)
+
+	-- Sound Effekt
+	local buildSound = Instance.new("Sound")
+	buildSound.SoundId = "rbxassetid://5775442053" -- Build complete sound
+	buildSound.Volume = 0.5
+	buildSound.Parent = workspace
+	buildSound:Play()
+	game:GetService("Debris"):AddItem(buildSound, 2)
+end)
+
+local FenceDestroyedRemote = Remotes:WaitForChild("FenceDestroyed")
+FenceDestroyedRemote.OnClientEvent:Connect(function(fenceName)
+	print("[MainGameClient] Fence destroyed: " .. fenceName)
+
+	-- Sound Effekt
+	local destroySound = Instance.new("Sound")
+	destroySound.SoundId = "rbxassetid://5775405655" -- Destruction sound
+	destroySound.Volume = 0.7
+	destroySound.Parent = workspace
+	destroySound:Play()
+	game:GetService("Debris"):AddItem(destroySound, 2)
+end)
+
+-- ═══════════════════════════════════════════════════════════════
+-- ZOMBIE DEATH VISUALIZATION
+-- ═══════════════════════════════════════════════════════════════
+
+local ZombieDiedRemote = Remotes:WaitForChild("ZombieDied")
+ZombieDiedRemote.OnClientEvent:Connect(function(zombie, expReward)
+	if zombie and zombie.Parent then
+		-- Death Effekt
+		for _, part in pairs(zombie:GetDescendants()) do
+			if part:IsA("BasePart") then
+				-- Ragdoll oder Fade-Out Effekt
+				TweenService:Create(
+					part,
+					TweenInfo.new(2, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
+					{Transparency = 1}
+				):Play()
+			end
+		end
+	end
+
+	-- EXP Popup (wird von GameUI gehandhabt)
+end)
+
+print("[MainGameClient] Initialization complete!")

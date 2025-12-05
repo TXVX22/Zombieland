@@ -1,0 +1,275 @@
+-- LobbyPanzaroMaster.lua
+-- WICHTIG: Dieses Script ist der MASTER für alle Panzaro-Werte in der Lobby!
+-- Platzierung: ServerScriptService/LobbyPanzaroMaster (Script)
+-- LÖSCHE: LobbyPanzaroLoader, LobbyPanzaroReceiver, PanzaroDirectSave
+
+local Players = game:GetService("Players")
+local DataStoreService = game:GetService("DataStoreService")
+local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+-- GLEICHER DataStore wie im MainGame!
+local panzaroDataStore = DataStoreService:GetDataStore("PanzaroCoins_v2")
+
+-- Cache für geladene Werte
+local playerPanzaroCache = {}
+local loadCompleted = {}
+
+-- Priorität System: DataStore > Cache > Default
+local PRIORITY_LEVELS = {
+	DATASTORE = 1,
+	CACHE = 2,
+	DEFAULT = 3
+}
+
+print("[PANZARO MASTER] =====================================")
+print("[PANZARO MASTER] Starting - This is the MASTER controller")
+print("[PANZARO MASTER] =====================================")
+
+-- Funktion zum Laden der Panzaros mit Priorität
+local function loadPlayerPanzaro(player)
+	print("[PANZARO MASTER] Loading for", player.Name, "...")
+
+	-- Markiere als in Bearbeitung
+	loadCompleted[player] = false
+
+	-- Versuche aus DataStore zu laden (HÖCHSTE PRIORITÄT)
+	local loadedAmount = nil
+	local attempts = 0
+
+	repeat
+		attempts = attempts + 1
+
+		local success, result = pcall(function()
+			return panzaroDataStore:GetAsync(player.UserId)
+		end)
+
+		if success then
+			loadedAmount = result or 0
+			print("[PANZARO MASTER] DataStore loaded:", loadedAmount, "for", player.Name, "(Attempt", attempts..")")
+			break
+		else
+			warn("[PANZARO MASTER] DataStore load failed (Attempt", attempts.."):", result)
+			task.wait(0.5)
+		end
+	until loadedAmount ~= nil or attempts >= 3
+
+	-- Falls DataStore fehlschlägt, nutze Cache oder Default
+	if loadedAmount == nil then
+		if playerPanzaroCache[player.UserId] then
+			loadedAmount = playerPanzaroCache[player.UserId]
+			print("[PANZARO MASTER] Using cached value:", loadedAmount)
+		else
+			loadedAmount = 0  -- NIEMALS 1000 als Default!
+			print("[PANZARO MASTER] No data found - using 0 as default")
+		end
+	end
+
+	-- Speichere im Cache
+	playerPanzaroCache[player.UserId] = loadedAmount
+
+	-- Erstelle/Update Leaderstats
+	local leaderstats = player:FindFirstChild("leaderstats")
+	if not leaderstats then
+		leaderstats = Instance.new("Folder")
+		leaderstats.Name = "leaderstats"
+		leaderstats.Parent = player
+	end
+
+	local panzaro = leaderstats:FindFirstChild("Panzaro")
+	if not panzaro then
+		panzaro = Instance.new("IntValue")
+		panzaro.Name = "Panzaro"
+		panzaro.Parent = leaderstats
+	end
+
+	panzaro.Value = loadedAmount
+
+	-- Markiere als fertig geladen
+	loadCompleted[player] = true
+
+	-- KRITISCH: Override Shop System und andere Systeme
+	task.spawn(function()
+		-- Warte bis Shop System lädt
+		task.wait(1)
+
+		-- Force update im Shop System
+		if _G.ShopPlayerData and _G.ShopPlayerData[player] then
+			_G.ShopPlayerData[player].panzaroCoins = loadedAmount
+			print("[PANZARO MASTER] Forced Shop System to use:", loadedAmount)
+		end
+
+		-- Kontinuierliche Überwachung für 10 Sekunden
+		local endTime = tick() + 10
+		while tick() < endTime do
+			task.wait(0.5)
+
+			-- Prüfe ob Leaderstats noch korrekt sind
+			if leaderstats.Parent and panzaro.Parent then
+				if panzaro.Value ~= loadedAmount then
+					print("[PANZARO MASTER] OVERRIDE: Correcting from", panzaro.Value, "to", loadedAmount)
+					panzaro.Value = loadedAmount
+
+					-- Force update Shop System wieder
+					if _G.ShopPlayerData and _G.ShopPlayerData[player] then
+						_G.ShopPlayerData[player].panzaroCoins = loadedAmount
+					end
+				end
+			else
+				break
+			end
+		end
+
+		print("[PANZARO MASTER] Monitoring ended for", player.Name, "- Final value:", loadedAmount)
+	end)
+
+	print("[PANZARO MASTER] ✅ Completed loading for", player.Name, ":", loadedAmount, "Panzaros")
+
+	return loadedAmount
+end
+
+-- Funktion zum Speichern
+local function savePlayerPanzaro(player, amount)
+	if not amount then
+		local leaderstats = player:FindFirstChild("leaderstats")
+		if leaderstats then
+			local panzaro = leaderstats:FindFirstChild("Panzaro")
+			if panzaro then
+				amount = panzaro.Value
+			end
+		end
+	end
+
+	if amount then
+		playerPanzaroCache[player.UserId] = amount
+
+		local success, err = pcall(function()
+			panzaroDataStore:SetAsync(player.UserId, amount)
+		end)
+
+		if success then
+			print("[PANZARO MASTER] Saved", amount, "Panzaros for", player.Name)
+		else
+			warn("[PANZARO MASTER] Failed to save:", err)
+		end
+	end
+end
+
+-- Global Functions für andere Systeme
+_G.GetPlayerPanzaro = function(player)
+	-- Warte bis geladen
+	local timeout = tick() + 5
+	while not loadCompleted[player] and tick() < timeout do
+		task.wait(0.1)
+	end
+
+	return playerPanzaroCache[player.UserId] or 0
+end
+
+_G.SetPlayerPanzaro = function(player, amount)
+	print("[PANZARO MASTER] External request to set", player.Name, "to", amount)
+
+	-- Update Cache
+	playerPanzaroCache[player.UserId] = amount
+
+	-- Update Leaderstats
+	local leaderstats = player:FindFirstChild("leaderstats")
+	if leaderstats then
+		local panzaro = leaderstats:FindFirstChild("Panzaro")
+		if panzaro then
+			panzaro.Value = amount
+		end
+	end
+
+	-- Update Shop System
+	if _G.ShopPlayerData and _G.ShopPlayerData[player] then
+		_G.ShopPlayerData[player].panzaroCoins = amount
+	end
+
+	-- Save to DataStore
+	savePlayerPanzaro(player, amount)
+end
+
+_G.AddPlayerPanzaro = function(player, amount)
+	local current = _G.GetPlayerPanzaro(player)
+	_G.SetPlayerPanzaro(player, current + amount)
+end
+
+-- Override Shop System Load Function
+_G.ForceCorrectPanzaro = function(player)
+	local correctAmount = playerPanzaroCache[player.UserId] or 0
+
+	if _G.ShopPlayerData and _G.ShopPlayerData[player] then
+		_G.ShopPlayerData[player].panzaroCoins = correctAmount
+	end
+
+	local leaderstats = player:FindFirstChild("leaderstats")
+	if leaderstats then
+		local panzaro = leaderstats:FindFirstChild("Panzaro")
+		if panzaro then
+			panzaro.Value = correctAmount
+		end
+	end
+
+	return correctAmount
+end
+
+-- Player Events
+Players.PlayerAdded:Connect(function(player)
+	loadPlayerPanzaro(player)
+end)
+
+Players.PlayerRemoving:Connect(function(player)
+	savePlayerPanzaro(player)
+	loadCompleted[player] = nil
+end)
+
+-- Debug Commands
+Players.PlayerAdded:Connect(function(player)
+	player.Chatted:Connect(function(msg)
+		if msg:lower() == "/checkpanzaro" then
+			print("[PANZARO MASTER] === CHECK FOR", player.Name, "===")
+			print("  Cache:", playerPanzaroCache[player.UserId] or "nil")
+
+			local leaderstats = player:FindFirstChild("leaderstats")
+			if leaderstats then
+				local panzaro = leaderstats:FindFirstChild("Panzaro")
+				if panzaro then
+					print("  Leaderstats:", panzaro.Value)
+				end
+			end
+
+			if _G.ShopPlayerData and _G.ShopPlayerData[player] then
+				print("  Shop System:", _G.ShopPlayerData[player].panzaroCoins or "nil")
+			end
+
+			pcall(function()
+				local stored = panzaroDataStore:GetAsync(player.UserId) or 0
+				print("  DataStore:", stored)
+			end)
+
+		elseif msg:lower():sub(1, 11) == "/setpanzaro" then
+			local amount = tonumber(msg:sub(13)) or 0
+			_G.SetPlayerPanzaro(player, amount)
+			print("[PANZARO MASTER] Set to", amount)
+
+		elseif msg:lower() == "/forcereload" then
+			loadPlayerPanzaro(player)
+			print("[PANZARO MASTER] Force reloaded for", player.Name)
+		end
+	end)
+end)
+
+-- Auto-save every 60 seconds
+task.spawn(function()
+	while true do
+		task.wait(60)
+		for _, player in ipairs(Players:GetPlayers()) do
+			savePlayerPanzaro(player)
+		end
+		print("[PANZARO MASTER] Auto-saved all players")
+	end
+end)
+
+print("[PANZARO MASTER] System ready!")
+print("[PANZARO MASTER] Commands: /checkpanzaro, /setpanzaro [amount], /forcereload")

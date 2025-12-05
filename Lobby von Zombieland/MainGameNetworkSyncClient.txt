@@ -1,0 +1,189 @@
+-- DATEI 2: MainGameNetworkSyncClient (CLIENT)  
+-- Platzierung: StarterPlayer/StarterPlayerScripts/MainGameNetworkSyncClient
+-- ========================================
+
+print("[NETWORK SYNC CLIENT] Starting interpolation system...")
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
+
+local player = Players.LocalPlayer
+
+-- Wait for sync folder
+local syncFolder = ReplicatedStorage:WaitForChild("SyncData", 10)
+if not syncFolder then
+	warn("[NETWORK SYNC CLIENT] SyncData folder not found!")
+	return
+end
+
+local positionSync = syncFolder:WaitForChild("PositionSync")
+local ownershipSync = syncFolder:WaitForChild("OwnershipSync")
+
+-- Track other players' positions for interpolation
+local targetPositions = {}
+local smoothingConnections = {}
+
+-- ===== INTERPOLATION SETTINGS =====
+local INTERPOLATION_SPEED = 0.15 -- Lower = smoother, Higher = more responsive
+local POSITION_THRESHOLD = 50 -- Max distance before teleporting instead of interpolating
+
+-- ===== SMOOTH POSITION INTERPOLATION =====
+-- WICHTIG: Wir setzen NICHT mehr die CFrame direkt, da das die Velocity zerstört
+-- Stattdessen berechnen wir eine synthetische Velocity für das Animation-System
+
+local function startSmoothingForPlayer(targetPlayer)
+	-- Don't smooth own character
+	if targetPlayer == player then return end
+
+	-- Clean up old connection
+	if smoothingConnections[targetPlayer] then
+		smoothingConnections[targetPlayer]:Disconnect()
+		smoothingConnections[targetPlayer] = nil
+	end
+
+	smoothingConnections[targetPlayer] = RunService.Heartbeat:Connect(function()
+		local character = targetPlayer.Character
+		if not character then
+			if smoothingConnections[targetPlayer] then
+				smoothingConnections[targetPlayer]:Disconnect()
+				smoothingConnections[targetPlayer] = nil
+			end
+			return
+		end
+
+		local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
+		if not humanoidRootPart then return end
+
+		local targetData = targetPositions[targetPlayer]
+		if targetData then
+			local currentPos = humanoidRootPart.Position
+			local targetPos = targetData.position
+
+			-- Calculate distance
+			local distance = (targetPos - currentPos).Magnitude
+
+			-- NEU: Berechne synthetische Velocity für das Animation-System
+			-- Dies ermöglicht dem MainGameHybridMorphClient die korrekte Animation zu spielen
+			local syntheticVelocity = Vector3.new(0, 0, 0)
+			if targetData.lastPosition then
+				local deltaPos = targetPos - targetData.lastPosition
+				local deltaTime = tick() - (targetData.lastTimestamp or tick())
+				if deltaTime > 0 then
+					syntheticVelocity = deltaPos / deltaTime
+				end
+			end
+			targetData.lastPosition = targetPos
+			targetData.lastTimestamp = tick()
+
+			-- Speichere synthetische Velocity global für das Animation-System
+			if not _G.SyntheticVelocities then
+				_G.SyntheticVelocities = {}
+			end
+			_G.SyntheticVelocities[targetPlayer] = syntheticVelocity
+
+			if distance > POSITION_THRESHOLD then
+				-- Teleport if too far (player probably teleported)
+				humanoidRootPart.CFrame = CFrame.lookAt(targetPos, targetPos + targetData.lookVector)
+			elseif distance > 0.1 then
+				-- Smooth interpolation
+				local newPos = currentPos:Lerp(targetPos, INTERPOLATION_SPEED)
+
+				-- Create smooth CFrame with look direction
+				local lookDir = targetData.lookVector
+				if lookDir.Magnitude > 0 then
+					humanoidRootPart.CFrame = humanoidRootPart.CFrame:Lerp(
+						CFrame.lookAt(newPos, newPos + lookDir),
+						INTERPOLATION_SPEED
+					)
+				else
+					humanoidRootPart.CFrame = CFrame.new(newPos) * (humanoidRootPart.CFrame - humanoidRootPart.CFrame.Position)
+				end
+			end
+		end
+	end)
+end
+
+local function stopSmoothingForPlayer(targetPlayer)
+	if smoothingConnections[targetPlayer] then
+		smoothingConnections[targetPlayer]:Disconnect()
+		smoothingConnections[targetPlayer] = nil
+	end
+	targetPositions[targetPlayer] = nil
+end
+
+-- ===== REMOTE EVENT HANDLERS =====
+
+positionSync.OnClientEvent:Connect(function(targetPlayer, position, lookVector)
+	-- Store target position
+	targetPositions[targetPlayer] = {
+		position = position,
+		lookVector = lookVector,
+		timestamp = tick()
+	}
+
+	-- Start smoothing if not already active
+	if not smoothingConnections[targetPlayer] then
+		startSmoothingForPlayer(targetPlayer)
+	end
+end)
+
+ownershipSync.OnClientEvent:Connect(function(targetPlayer, isActive)
+	if isActive then
+		print("[NETWORK SYNC CLIENT] Player active:", targetPlayer.Name)
+		-- Wait a bit for character to load
+		wait(0.5)
+		startSmoothingForPlayer(targetPlayer)
+	else
+		print("[NETWORK SYNC CLIENT] Player inactive:", targetPlayer.Name)
+		stopSmoothingForPlayer(targetPlayer)
+	end
+end)
+
+-- ===== HANDLE EXISTING PLAYERS =====
+
+for _, otherPlayer in ipairs(Players:GetPlayers()) do
+	if otherPlayer ~= player and otherPlayer.Character then
+		startSmoothingForPlayer(otherPlayer)
+	end
+end
+
+-- ===== PLAYER EVENTS =====
+
+Players.PlayerAdded:Connect(function(newPlayer)
+	if newPlayer ~= player then
+		newPlayer.CharacterAdded:Connect(function()
+			wait(1) -- Wait for character to load
+			startSmoothingForPlayer(newPlayer)
+		end)
+
+		newPlayer.CharacterRemoving:Connect(function()
+			stopSmoothingForPlayer(newPlayer)
+		end)
+	end
+end)
+
+Players.PlayerRemoving:Connect(function(leavingPlayer)
+	stopSmoothingForPlayer(leavingPlayer)
+end)
+
+-- ===== CLEANUP OLD POSITION DATA =====
+
+spawn(function()
+	while true do
+		wait(10)
+		local currentTime = tick()
+
+		-- Remove old position data (older than 5 seconds)
+		for targetPlayer, data in pairs(targetPositions) do
+			if currentTime - data.timestamp > 5 then
+				targetPositions[targetPlayer] = nil
+			end
+		end
+	end
+end)
+
+print("[NETWORK SYNC CLIENT] Interpolation system loaded!")
+print("Interpolation speed:", INTERPOLATION_SPEED)
+print("Position threshold:", POSITION_THRESHOLD)

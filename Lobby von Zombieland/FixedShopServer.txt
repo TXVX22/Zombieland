@@ -1,0 +1,1048 @@
+-- FIXED SHOP SERVER WITH PERSISTENT SKIN SAVE
+-- ServerScriptService/FixedShopServer (Script)
+
+print("[FIXED SHOP SERVER] Starting with persistent skin save...")
+
+local Players = game:GetService("Players")
+local DataStoreService = game:GetService("DataStoreService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+
+-- DataStores
+local ultimateDataStore
+local panzaroDataStore
+local skinDataStore
+local mythicDataStore -- NEU: DataStore für Mythic Uses
+local useDataStore = true
+
+pcall(function()
+	ultimateDataStore = DataStoreService:GetDataStore("PlayerUltimatesFixed")
+	panzaroDataStore = DataStoreService:GetDataStore("PanzaroCoinsFixed")
+	skinDataStore = DataStoreService:GetDataStore("PlayerSkinsFixed")
+	mythicDataStore = DataStoreService:GetDataStore("PlayerMythicData_v1")
+end)
+
+-- Data Modules
+local UltimateData = require(ReplicatedStorage:WaitForChild("UltimateData"))
+local SoldierSkinData = require(ReplicatedStorage:WaitForChild("SoldierSkinData"))
+
+-- DEFAULT ULTIMATES CONFIGURATION
+local DEFAULT_ULTIMATES = {
+	StoneAge = "MeteorRain",
+	Medieval = "FireArrowRain",
+	Industrial = "DynamiteRain",
+	Modern = "JetStrike",
+	Future = "AIVirus"
+}
+
+-- VIP PASS CONFIGURATION
+local VIP_PASS_PRICE = 0  -- Preis in Panzaro
+local VIP_PASS_ICON = "rbxassetid://114052069497135"
+
+-- Create RemoteEvents Folder
+local remotesFolder = Instance.new("Folder")
+remotesFolder.Name = "ShopRemotes"
+remotesFolder.Parent = ReplicatedStorage
+
+-- Create RemoteEvents
+local remoteEvents = {
+	OpenShop = Instance.new("RemoteEvent"),
+	BuyItem = Instance.new("RemoteFunction"),
+	EquipSkin = Instance.new("RemoteFunction"),
+	SelectUltimate = Instance.new("RemoteFunction"),
+	GetPlayerData = Instance.new("RemoteFunction"),
+	UpdateMorphVisuals = Instance.new("RemoteEvent"),
+}
+
+for name, remote in pairs(remoteEvents) do
+	remote.Name = name
+	remote.Parent = remotesFolder
+end
+
+-- NEU: RemoteFunction für Mythic Toggle hinzufügen
+local toggleMythicUltimate = Instance.new("RemoteFunction")
+toggleMythicUltimate.Name = "ToggleMythicUltimate"
+toggleMythicUltimate.Parent = remotesFolder
+
+
+-- Player Data Cache
+local playerData = {}
+
+-- Track what skin player is actually wearing
+local activePlayerSkins = {}
+
+-- Track if player has made custom selections
+local playerHasCustomSelections = {}
+
+-- ===== HYBRID MORPH INTEGRATION FUNCTIONS =====
+
+local function serverMorphPlayer(player, skinName)
+	-- Prüfe zuerst ob Player und Character existieren
+	if not player or not player.Parent then
+		warn("[SHOP SERVER] Player not valid for morph")
+		return false
+	end
+
+	local character = player.Character
+	if not character then
+		warn("[SHOP SERVER] No character for morph")
+		return false
+	end
+
+	-- Versuche HybridMorphPlayer zu nutzen
+	if _G.HybridMorphPlayer then
+		local success = _G.HybridMorphPlayer(player, skinName)
+		if success then
+			print("[SHOP SERVER] ✅ Triggered hybrid morph for", player.Name, "->", skinName)
+			activePlayerSkins[player] = skinName
+			return true
+		else
+			warn("[SHOP SERVER] ⚠️ Hybrid morph returned false for", player.Name)
+		end
+	else
+		print("[SHOP SERVER] HybridMorphPlayer not found, waiting...")
+
+		-- Warte bis zu 3 Sekunden auf HybridMorphServer
+		local waited = 0
+		while waited < 3 do
+			task.wait(0.5)
+			waited = waited + 0.5
+
+			if _G.HybridMorphPlayer then
+				print("[SHOP SERVER] HybridMorphPlayer found after", waited, "seconds")
+				local success = _G.HybridMorphPlayer(player, skinName)
+				if success then
+					print("[SHOP SERVER] ✅ Triggered hybrid morph for", player.Name, "->", skinName, "(after wait)")
+					activePlayerSkins[player] = skinName
+					return true
+				else
+					warn("[SHOP SERVER] ⚠️ Hybrid morph returned false after wait")
+					break
+				end
+			end
+		end
+
+		warn("[SHOP SERVER] ❌ HybridMorph system not available after 3 seconds!")
+	end
+
+	-- Fallback: Setze wenigstens activePlayerSkins
+	activePlayerSkins[player] = skinName
+	return false
+end
+
+local function serverResetMorph(player)
+	-- Cleanup Morph
+	if _G.HybridCleanupMorph then
+		_G.HybridCleanupMorph(player)
+		print("[SHOP SERVER] Used HybridCleanupMorph")
+	else
+		-- Fallback: Nutze animation sync
+		local animationSyncRemote = remotesFolder:FindFirstChild("SyncMorphAnimations")
+		if animationSyncRemote then
+			animationSyncRemote:FireAllClients(player, nil, nil)
+			print("[SHOP SERVER] Used animation sync for cleanup")
+		end
+	end
+
+	activePlayerSkins[player] = nil
+	print("[SHOP SERVER] Reset morph for", player.Name)
+end
+
+-- ===== PLAYER DATA MANAGEMENT =====
+
+local function loadPlayerData(player)
+	local userId = player.UserId
+	local data = {}
+
+	-- WICHTIG: Warte bis PanzaroMaster geladen hat
+	task.wait(1)
+
+	if useDataStore then
+		-- Lade Ultimate Daten
+		pcall(function()
+			local result = ultimateDataStore:GetAsync(userId)
+			if result then
+				data.ownedUltimates = result.ownedUltimates or {}
+				data.selectedUltimates = result.selectedUltimates or {}
+				data.ownedMythicUltimates = result.ownedMythicUltimates or {}
+			end
+		end)
+
+		-- WICHTIG: NICHT MEHR PANZARO AUS EIGENEM DATASTORE LADEN!
+		-- Nutze stattdessen den PanzaroMaster
+		if _G.GetPlayerPanzaro then
+			data.panzaroCoins = _G.GetPlayerPanzaro(player)
+			print("[SHOP SERVER] Got Panzaro from Master:", data.panzaroCoins)
+		else
+			-- Fallback: Hole aus Leaderstats
+			local leaderstats = player:FindFirstChild("leaderstats")
+			if leaderstats then
+				local panzaro = leaderstats:FindFirstChild("Panzaro")
+				if panzaro then
+					data.panzaroCoins = panzaro.Value
+					print("[SHOP SERVER] Got Panzaro from Leaderstats:", data.panzaroCoins)
+				end
+			end
+		end
+
+		-- FIXED: Lade Skin Daten KORREKT
+		pcall(function()
+			local skinData = skinDataStore:GetAsync(userId)
+			if skinData then
+				data.ownedSkins = skinData.ownedSkins or {}
+				data.selectedSkins = skinData.selectedSkins or {}
+				-- WICHTIG: lastEquippedSkin wird jetzt korrekt geladen!
+				data.lastEquippedSkin = skinData.lastEquippedSkin
+				data.actualEquippedSkin = skinData.actualEquippedSkin -- Zusätzlicher Fallback
+
+				print("[SHOP SERVER] Loaded skin data for", player.Name)
+				print("  Last equipped skin:", data.lastEquippedSkin or "none")
+				print("  Actual equipped skin:", data.actualEquippedSkin or "none")
+			end
+		end)
+
+		-- NEU: Lade Mythic Daten
+		pcall(function()
+			local mythicData = mythicDataStore:GetAsync(userId)
+			if mythicData then
+				data.mythicUses = mythicData.uses or 0
+				data.activeMythicUltimate = mythicData.activeUltimate
+			end
+		end)
+
+	else
+		-- Test Mode
+		data.panzaroCoins = 10000
+	end
+
+	-- Initialize defaults
+	data.ownedUltimates = data.ownedUltimates or {}
+	data.selectedUltimates = data.selectedUltimates or {}
+	data.ownedMythicUltimates = data.ownedMythicUltimates or {}
+	data.ownedSkins = data.ownedSkins or {}
+
+	-- NEU: Initialisiere neue Mythic Variablen
+	data.mythicUses = data.mythicUses or 0  -- Neue Variable für Uses
+	data.activeMythicUltimate = data.activeMythicUltimate or nil  -- Bleibt, wird aber anders gehandhabt
+
+	-- Load VIP Pass ownership
+	data.hasVIPPass = false
+	pcall(function()
+		local vipPassDataStore = DataStoreService:GetDataStore("VIPPassOwners_AOW_v1")
+		data.hasVIPPass = vipPassDataStore:GetAsync(userId) or false
+	end)
+
+	-- Load VIP title preference
+	data.vipTitleHidden = false
+	pcall(function()
+		local vipPrefsDataStore = DataStoreService:GetDataStore("VIPPreferences_v1")
+		local prefs = vipPrefsDataStore:GetAsync(userId)
+		if prefs and prefs.titleHidden then
+			data.vipTitleHidden = true
+		end
+	end)
+
+	data.selectedSkins = data.selectedSkins or {}
+
+	-- FIXED: Nutze actualEquippedSkin als Fallback wenn lastEquippedSkin nicht existiert
+	if not data.lastEquippedSkin and data.actualEquippedSkin then
+		data.lastEquippedSkin = data.actualEquippedSkin
+	end
+
+	-- WICHTIG: Nutze den Wert vom PanzaroMaster, NICHT default 1000!
+	if not data.panzaroCoins then
+		data.panzaroCoins = 0  -- NIEMALS 1000 als Default!
+	end
+
+	-- Give ownership of default ultimates
+	for epoch, ultimateName in pairs(DEFAULT_ULTIMATES) do
+		data.ownedUltimates[ultimateName] = true
+	end
+
+	-- Give ownership of other default ultimates from UltimateData
+	for epoch, ultimates in pairs(UltimateData.Ultimates) do
+		for _, ultimate in ipairs(ultimates) do
+			if ultimate.isDefault then
+				data.ownedUltimates[ultimate.name] = true
+			end
+		end
+	end
+
+	-- Check if player has any custom ultimate selections
+	local hasCustomSelections = false
+	if data.selectedUltimates then
+		for epoch, ultimate in pairs(data.selectedUltimates) do
+			if ultimate and ultimate ~= "" then
+				hasCustomSelections = true
+				break
+			end
+		end
+	end
+
+	-- Set default selected ultimates ONLY if player has no custom selections
+	if not hasCustomSelections then
+		print("[SHOP SERVER] Setting default ultimates for", player.Name)
+		for epoch, ultimateName in pairs(DEFAULT_ULTIMATES) do
+			-- Only set default if not already selected
+			if not data.selectedUltimates[epoch] then
+				data.selectedUltimates[epoch] = ultimateName
+			end
+		end
+		playerHasCustomSelections[player] = false
+	else
+		print("[SHOP SERVER] Player", player.Name, "has custom ultimate selections")
+		playerHasCustomSelections[player] = true
+
+		-- Validate that selected ultimates still exist and are owned
+		for epoch, ultimateName in pairs(data.selectedUltimates) do
+			if not data.ownedUltimates[ultimateName] then
+				data.selectedUltimates[epoch] = DEFAULT_ULTIMATES[epoch]
+				data.ownedUltimates[DEFAULT_ULTIMATES[epoch]] = true
+			end
+		end
+	end
+
+	-- Give default skins
+	for _, skin in ipairs(SoldierSkinData.Skins) do
+		if skin.isDefault then
+			data.ownedSkins[skin.name] = true
+		end
+	end
+
+	playerData[player] = data
+	activePlayerSkins[player] = nil
+
+	-- GLOBAL für PanzaroMaster
+	_G.ShopPlayerData = _G.ShopPlayerData or {}
+	_G.ShopPlayerData[player] = data
+
+	print("[SHOP SERVER] Loaded data for", player.Name)
+	print("  Panzaro Coins:", data.panzaroCoins)
+	print("  Selected Ultimates:", data.selectedUltimates)
+	print("  Last Equipped Skin:", data.lastEquippedSkin or "none")
+
+	return data
+end
+
+local function savePlayerData(player)
+	if not useDataStore then return end
+
+	local userId = player.UserId
+	local data = playerData[player]
+	if not data then return end
+
+	-- Speichere Ultimate Daten
+	pcall(function()
+		ultimateDataStore:SetAsync(userId, {
+			ownedUltimates = data.ownedUltimates,
+			selectedUltimates = data.selectedUltimates,
+			ownedMythicUltimates = data.ownedMythicUltimates
+		})
+	end)
+
+	-- WICHTIG: NICHT MEHR PANZARO HIER SPEICHERN!
+	-- Der PanzaroMaster übernimmt das
+	if _G.SetPlayerPanzaro then
+		_G.SetPlayerPanzaro(player, data.panzaroCoins)
+	end
+
+	-- FIXED: Speichere Skin Daten mit BEIDEN Feldern für Redundanz
+	pcall(function()
+		skinDataStore:SetAsync(userId, {
+			ownedSkins = data.ownedSkins,
+			selectedSkins = data.selectedSkins,
+			lastEquippedSkin = data.lastEquippedSkin or activePlayerSkins[player],
+			actualEquippedSkin = activePlayerSkins[player] or data.lastEquippedSkin -- Redundanz
+		})
+		print("[SHOP SERVER] Saved skin data for", player.Name)
+		print("  lastEquippedSkin:", data.lastEquippedSkin)
+		print("  actualEquippedSkin:", activePlayerSkins[player])
+	end)
+
+	-- NEU: Speichere Mythic Daten
+	pcall(function()
+		mythicDataStore:SetAsync(userId, {
+			uses = data.mythicUses,
+			activeUltimate = data.activeMythicUltimate
+		})
+		print("[SHOP SERVER] Saved mythic data for", player.Name)
+	end)
+
+
+	print("[SHOP SERVER] Saved data for", player.Name)
+end
+
+-- ===== REMOTE FUNCTIONS =====
+
+remoteEvents.GetPlayerData.OnServerInvoke = function(player)
+	local data = playerData[player]
+	if not data then
+		loadPlayerData(player)
+		data = playerData[player]
+	end
+
+	return {
+		panzaroCoins = data.panzaroCoins or 0,
+		ownedSkins = data.ownedSkins or {},
+		selectedSkins = data.selectedSkins or {},
+		ownedUltimates = data.ownedUltimates or {},
+		selectedUltimates = data.selectedUltimates or {},
+		ownedMythicUltimates = data.ownedMythicUltimates or {},
+		actualEquippedSkin = activePlayerSkins[player] or data.lastEquippedSkin,
+		hasVIPPass = data.hasVIPPass,
+		vipTitleHidden = data.vipTitleHidden,
+		mythicUses = data.mythicUses or 0,
+		activeMythicUltimate = data.activeMythicUltimate
+	}
+end
+
+remoteEvents.BuyItem.OnServerInvoke = function(player, itemType, itemName)
+	local data = playerData[player]
+	if not data then return false, "No data" end
+
+	if itemType == "skin" then
+		local skinData = SoldierSkinData:GetSkin(itemName)
+		if not skinData then return false, "Skin not found" end
+
+		if data.ownedSkins[itemName] then
+			return false, "Already owned"
+		end
+
+		local price = skinData.panzaroPrice or 100
+
+		if price > 0 and (data.panzaroCoins or 0) < price then
+			return false, "Not enough Panzaro"
+		end
+
+		if price > 0 then
+			data.panzaroCoins = (data.panzaroCoins or 0) - price
+
+			-- WICHTIG: Update PanzaroMaster nach dem Kauf!
+			if _G.SetPlayerPanzaro then
+				_G.SetPlayerPanzaro(player, data.panzaroCoins)
+			end
+		end
+
+		data.ownedSkins[itemName] = true
+		savePlayerData(player)
+
+		print("[SHOP SERVER]", player.Name, "bought skin:", itemName)
+		return true, "Success"
+
+	elseif itemType == "ultimate" then
+		local ultimateInfo = nil
+		local ultimateEpoch = nil
+
+		for epoch, ultimates in pairs(UltimateData.Ultimates) do
+			for _, ultimate in ipairs(ultimates) do
+				if ultimate.name == itemName then
+					ultimateInfo = ultimate
+					ultimateEpoch = epoch
+					break
+				end
+			end
+			if ultimateInfo then break end
+		end
+
+		if not ultimateInfo then return false, "Ultimate not found" end
+
+		if data.ownedUltimates[itemName] then
+			return false, "Already owned"
+		end
+
+		local price = ultimateInfo.panzaroPrice or 100
+
+		if price > 0 and (data.panzaroCoins or 0) < price then
+			return false, "Not enough Panzaro"
+		end
+
+		if price > 0 then
+			data.panzaroCoins = (data.panzaroCoins or 0) - price
+
+			-- WICHTIG: Update PanzaroMaster nach dem Kauf!
+			if _G.SetPlayerPanzaro then
+				_G.SetPlayerPanzaro(player, data.panzaroCoins)
+			end
+		end
+
+		data.ownedUltimates[itemName] = true
+		savePlayerData(player)
+
+		print("[SHOP SERVER]", player.Name, "bought ultimate:", itemName)
+		return true, "Success"
+
+		-- GEÄNDERT: Kompletter Block für Mythic-Käufe
+	elseif itemType == "mythicuses" then
+		local amount = tonumber(itemName) or 1  -- 1, 3, 5, 10, 25
+		local costPerUse = 2
+		local totalCost = amount * costPerUse
+
+		if (data.panzaroCoins or 0) < totalCost then
+			return false, "Not enough Panzaro"
+		end
+
+		data.panzaroCoins = data.panzaroCoins - totalCost
+		data.mythicUses = (data.mythicUses or 0) + amount
+
+		-- Update PanzaroMaster
+		if _G.SetPlayerPanzaro then
+			_G.SetPlayerPanzaro(player, data.panzaroCoins)
+		end
+
+		savePlayerData(player)
+		print("[SHOP SERVER]", player.Name, "bought", amount, "mythic uses for", totalCost, "Panzaro.")
+		return true, "Success"
+
+	elseif itemType == "vippass" then
+		-- Check if already owns
+		if data.hasVIPPass then
+			return false, "Already VIP"
+		end
+
+		-- Check price
+		if (data.panzaroCoins or 0) < VIP_PASS_PRICE then
+			return false, "Not enough Panzaro"
+		end
+
+		-- Deduct price
+		data.panzaroCoins = (data.panzaroCoins or 0) - VIP_PASS_PRICE
+
+		-- Update PanzaroMaster
+		if _G.SetPlayerPanzaro then
+			_G.SetPlayerPanzaro(player, data.panzaroCoins)
+		end
+
+		-- Grant VIP Pass
+		data.hasVIPPass = true
+
+		-- Save to DataStore
+		pcall(function()
+			local vipPassDataStore = DataStoreService:GetDataStore("VIPPassOwners_AOW_v1")
+			vipPassDataStore:SetAsync(player.UserId, true)
+		end)
+
+		-- Grant VIP status immediately
+		if _G.GrantVIPPass then
+			_G.GrantVIPPass(player)
+		end
+
+		savePlayerData(player)
+
+		print("[SHOP SERVER]", player.Name, "bought VIP Pass!")
+		return true, "Success"
+	end
+
+	return false, "Unknown item type"
+end
+
+remoteEvents.EquipSkin.OnServerInvoke = function(player, skinName)
+	local data = playerData[player]
+	if not data then return false, "No data" end
+
+	if not data.ownedSkins[skinName] then
+		return false, "Not owned"
+	end
+
+	local skinInfo = SoldierSkinData:GetSkin(skinName)
+	if not skinInfo then return false, "Skin not found" end
+
+	if not data.selectedSkins then
+		data.selectedSkins = {}
+	end
+
+	data.selectedSkins[skinInfo.epoch] = skinName
+	data.lastEquippedSkin = skinName -- WICHTIG: Speichere als lastEquippedSkin
+	activePlayerSkins[player] = skinName -- Und als activePlayerSkin
+
+	local success = serverMorphPlayer(player, skinName)
+
+	-- FIXED: Speichere SOFORT nach dem Equippen
+	savePlayerData(player)
+
+	if success then
+		print("[FIXED SHOP SERVER]", player.Name, "equipped and saved skin:", skinName)
+		return true, "Success"
+	else
+		print("[FIXED SHOP SERVER]", player.Name, "equipped skin (fallback):", skinName)
+		return true, "Success"
+	end
+end
+
+remoteEvents.SelectUltimate.OnServerInvoke = function(player, epoch, ultimateName)
+	local data = playerData[player]
+	if not data then return false, "No data" end
+
+	if not data.ownedUltimates[ultimateName] then
+		return false, "Not owned"
+	end
+
+	if not data.selectedUltimates then
+		data.selectedUltimates = {}
+	end
+
+	-- Mark that player has made a custom selection
+	playerHasCustomSelections[player] = true
+
+	data.selectedUltimates[epoch] = ultimateName
+
+	-- WICHTIG: Sofort speichern nach der Auswahl!
+	savePlayerData(player)
+
+	print("[FIXED SHOP SERVER]", player.Name, "selected ultimate:", ultimateName, "for", epoch)
+	print("  Saved selection immediately:", data.selectedUltimates[epoch])
+
+	return true, "Success"
+end
+
+-- NEU: Handler für den Mythic Toggle
+toggleMythicUltimate.OnServerInvoke = function(player, ultimateName)
+	local data = playerData[player]
+	if not data then return false, "No data" end
+
+	-- Deaktivieren, wenn das aktuell aktive Ultimate erneut angeklickt wird
+	if data.activeMythicUltimate == ultimateName then
+		data.activeMythicUltimate = nil
+		savePlayerData(player)
+		print("[SHOP SERVER]", player.Name, "deactivated mythic ultimate.")
+		return true, "Deactivated"
+	end
+
+	-- Aktivieren - nur wenn Uses vorhanden sind
+	if (data.mythicUses or 0) <= 0 then
+		return false, "No uses available"
+	end
+
+	data.activeMythicUltimate = ultimateName
+	savePlayerData(player)
+	print("[SHOP SERVER]", player.Name, "activated mythic ultimate:", ultimateName)
+	return true, "Activated"
+end
+
+
+-- Toggle VIP Title Handler
+local toggleVIPTitle = Instance.new("RemoteFunction")
+toggleVIPTitle.Name = "ToggleVIPTitle"
+toggleVIPTitle.Parent = remotesFolder
+
+toggleVIPTitle.OnServerInvoke = function(player, showTitle)
+	local data = playerData[player]
+	if not data then return false, "No data" end
+
+	if not data.hasVIPPass then
+		local userId = tostring(player.UserId)
+		-- Check if player is Top 25
+		local isTop25 = false
+		pcall(function()
+			local winsDataStore = DataStoreService:GetOrderedDataStore("MultiplayerWins_v1")
+			local result = winsDataStore:GetSortedAsync(false, 25)
+			local pages = result:GetCurrentPage()
+			for _, entry in ipairs(pages) do
+				if tostring(entry.key) == userId then
+					isTop25 = true
+					break
+				end
+			end
+		end)
+
+		if not isTop25 then
+			return false, "Not VIP"
+		end
+	end
+
+	data.vipTitleHidden = not showTitle
+
+	-- Call VIP system to toggle
+	if _G.ToggleVIPTitle then
+		_G.ToggleVIPTitle(player, showTitle)
+	end
+
+	return true, "Success"
+end
+
+-- ===== NPC SETUP =====
+
+local haendlerFolder = workspace:WaitForChild("Alles", 10)
+if haendlerFolder then
+	local npcNamen = {
+		"ICH Kugelbar",
+		"ICH Langtheke",
+		"ICH VIP",
+		"TONI VIP",
+		"TONI Langtheke",
+		"TONI Kugelbar"
+	}
+
+	for _, npcName in ipairs(npcNamen) do
+		local npc = haendlerFolder:FindFirstChild(npcName)
+		if npc then
+			-- NEUE HITBOX: Erstelle ein unsichtbares Part als erweiterte Hitbox
+			local hitboxPart = Instance.new("Part")
+			hitboxPart.Name = "ClickHitbox"
+			hitboxPart.Size = Vector3.new(10, 10, 10)  -- HIER DIE GRÖSSE ANPASSEN! (X, Y, Z)
+			hitboxPart.Transparency = 1  -- Unsichtbar
+			hitboxPart.CanCollide = false  -- Keine Kollision
+			hitboxPart.Anchored = true
+
+			-- Positioniere die Hitbox am NPC
+			local npcPrimaryPart = npc:FindFirstChild("HumanoidRootPart") or npc:FindFirstChild("Torso") or npc:FindFirstChild("Head")
+			if npcPrimaryPart then
+				hitboxPart.CFrame = npcPrimaryPart.CFrame
+			else
+				hitboxPart.Position = npc:GetBoundingBox().Position
+			end
+
+			hitboxPart.Parent = npc
+
+			-- Weld die Hitbox an den NPC (falls er sich bewegt)
+			if npcPrimaryPart then
+				local weld = Instance.new("WeldConstraint")
+				weld.Part0 = hitboxPart
+				weld.Part1 = npcPrimaryPart
+				weld.Parent = hitboxPart
+			end
+
+			-- ClickDetector auf die Hitbox setzen (nicht mehr auf den NPC direkt)
+			local clickDetector = Instance.new("ClickDetector")
+			clickDetector.MaxActivationDistance = 15
+			clickDetector.Parent = hitboxPart  -- WICHTIG: Parent ist jetzt die Hitbox!
+
+			clickDetector.MouseClick:Connect(function(player)
+				remoteEvents.OpenShop:FireClient(player)
+			end)
+
+			-- Billboard GUI bleibt beim NPC
+			local billboard = Instance.new("BillboardGui")
+			billboard.Size = UDim2.new(3, 0, 0.8, 0)
+			billboard.StudsOffset = Vector3.new(0, 4, 0)
+			billboard.AlwaysOnTop = true
+			billboard.MaxDistance = 200
+			billboard.Parent = npc:FindFirstChild("Head") or npc
+
+			local label = Instance.new("TextLabel")
+			label.Size = UDim2.new(1, 0, 1, 0)
+			label.BackgroundTransparency = 1
+			label.Text = "🛍️ Shop"
+			label.TextScaled = false
+			label.TextSize = 28
+			label.TextColor3 = Color3.new(1, 0.8, 0)
+			label.Font = Enum.Font.SourceSansBold
+			label.TextStrokeTransparency = 0.5
+			label.TextStrokeColor3 = Color3.new(0, 0, 0)
+			label.Parent = billboard
+
+			local background = Instance.new("Frame")
+			background.Size = UDim2.new(1, 0, 1, 0)
+			background.BackgroundColor3 = Color3.new(0, 0, 0)
+			background.BackgroundTransparency = 0.7
+			background.BorderSizePixel = 0
+			background.Parent = billboard
+
+			local corner = Instance.new("UICorner")
+			corner.CornerRadius = UDim.new(0.3, 0)
+			corner.Parent = background
+
+			label.ZIndex = 2
+
+			print("[FIXED SHOP SERVER] NPC activated with hitbox:", npcName)
+		end
+	end
+end
+
+-- ===== PLAYER EVENTS =====
+
+Players.PlayerAdded:Connect(function(player)
+	-- Lade Daten sofort
+	loadPlayerData(player)
+
+	-- Warte kurz damit PanzaroMaster zuerst lädt
+	task.wait(1)
+
+	-- Character Added Event
+	player.CharacterAdded:Connect(function(character)
+		-- Spawn in eigenem Thread
+		task.spawn(function()
+			-- Warte bis Character fertig geladen ist
+			local humanoid = character:WaitForChild("Humanoid", 10)
+			if not humanoid then return end
+
+			-- Warte bis Character vollständig spawned
+			task.wait(2)
+
+			-- Stelle sicher dass playerData existiert
+			local data = playerData[player]
+			if not data then
+				-- Versuche nochmal zu laden
+				loadPlayerData(player)
+				task.wait(1)
+				data = playerData[player]
+			end
+
+			-- FIXED: Check ob lastEquippedSkin existiert und besessen wird
+			local skinToEquip = data and data.lastEquippedSkin
+
+			if skinToEquip and data.ownedSkins and data.ownedSkins[skinToEquip] then
+				print("[SHOP SERVER] Attempting to auto-morph", player.Name, "to saved skin:", skinToEquip)
+
+				-- Warte noch etwas für stability
+				task.wait(1)
+
+				-- Versuche Morph anzuwenden mit Retry-Logik
+				local attempts = 0
+				local success = false
+
+				repeat
+					attempts = attempts + 1
+					success = serverMorphPlayer(player, skinToEquip)
+
+					if success then
+						print("[SHOP SERVER] ✅ Auto-morphed", player.Name, "to:", skinToEquip, "on attempt", attempts)
+						activePlayerSkins[player] = skinToEquip
+						-- Update lastEquippedSkin falls es sich geändert hat
+						data.lastEquippedSkin = skinToEquip
+						break
+					else
+						print("[SHOP SERVER] Attempt", attempts, "failed, retrying...")
+						task.wait(1)
+					end
+				until success or attempts >= 3
+
+				if not success then
+					warn("[SHOP SERVER] Failed to auto-morph after 3 attempts")
+					activePlayerSkins[player] = nil
+				end
+			else
+				activePlayerSkins[player] = nil
+				print("[SHOP SERVER] No saved skin for", player.Name, "- spawning with default")
+
+				if data then
+					print("  lastEquippedSkin:", skinToEquip or "nil")
+					print("  owned:", data.ownedSkins and skinToEquip and data.ownedSkins[skinToEquip] or false)
+				end
+			end
+		end)
+	end)
+
+	-- Character Removing Event
+	player.CharacterRemoving:Connect(function()
+		-- FIXED: Speichere aktuellen Skin beim Character Remove
+		if activePlayerSkins[player] then
+			if playerData[player] then
+				playerData[player].lastEquippedSkin = activePlayerSkins[player]
+				-- Sofort speichern
+				savePlayerData(player)
+				print("[SHOP SERVER] Saved equipped skin on character remove:", activePlayerSkins[player])
+			end
+		end
+	end)
+end)
+
+Players.PlayerRemoving:Connect(function(player)
+	-- FIXED: Finale Speicherung mit aktuellem Skin
+	if activePlayerSkins[player] and playerData[player] then
+		playerData[player].lastEquippedSkin = activePlayerSkins[player]
+	end
+
+	-- Speichere alle Daten
+	savePlayerData(player)
+
+	-- Cleanup
+	playerData[player] = nil
+	activePlayerSkins[player] = nil
+	playerHasCustomSelections[player] = nil
+
+	print("[SHOP SERVER] Player removed, all data saved including skin:", activePlayerSkins[player] or "none")
+end)
+
+-- ===== AUTO-SAVE SYSTEM =====
+-- Speichere alle 30 Sekunden für extra Sicherheit
+task.spawn(function()
+	while true do
+		task.wait(30)
+		for player, data in pairs(playerData) do
+			if player and player.Parent then
+				-- Update lastEquippedSkin vor dem Speichern
+				if activePlayerSkins[player] then
+					data.lastEquippedSkin = activePlayerSkins[player]
+				end
+				savePlayerData(player)
+			end
+		end
+		print("[SHOP SERVER] Auto-saved all player data")
+	end
+end)
+
+-- ===== TEST COMMANDS =====
+
+Players.PlayerAdded:Connect(function(player)
+	player.Chatted:Connect(function(message)
+		-- Check Skin Command
+		if message:lower() == "/checkskin" then
+			local data = playerData[player]
+			if data then
+				print("[SHOP SERVER] === SKIN CHECK for", player.Name, "===")
+				print("  lastEquippedSkin:", data.lastEquippedSkin or "none")
+				print("  activePlayerSkin:", activePlayerSkins[player] or "none")
+				print("  Owned skins:")
+				for skin, owned in pairs(data.ownedSkins or {}) do
+					if owned then
+						print("    -", skin)
+					end
+				end
+			else
+				print("[SHOP SERVER] No data loaded for", player.Name)
+			end
+
+			-- Force Skin Command
+		elseif message:lower() == "/forceskin" then
+			local data = playerData[player]
+			if data and data.lastEquippedSkin then
+				print("[SHOP SERVER] Force applying skin:", data.lastEquippedSkin)
+				local success = serverMorphPlayer(player, data.lastEquippedSkin)
+				if success then
+					print("[SHOP SERVER] Force morph successful")
+					activePlayerSkins[player] = data.lastEquippedSkin
+				else
+					print("[SHOP SERVER] Force morph failed")
+				end
+			else
+				print("[SHOP SERVER] No saved skin to force apply")
+			end
+
+			-- Set Skin Command
+		elseif message:lower():sub(1, 9) == "/setskin " then
+			local skinName = message:sub(10)
+			local data = playerData[player]
+			if data then
+				-- Give ownership
+				data.ownedSkins[skinName] = true
+				data.lastEquippedSkin = skinName
+
+				-- Apply
+				local success = serverMorphPlayer(player, skinName)
+				if success then
+					activePlayerSkins[player] = skinName
+					savePlayerData(player)
+					print("[SHOP SERVER] Set and equipped skin:", skinName)
+				else
+					print("[SHOP SERVER] Failed to apply skin:", skinName)
+				end
+			end
+
+			-- Give Panzaro Command
+		elseif message:lower() == "/givepanzaro" then
+			if playerData[player] then
+				playerData[player].panzaroCoins = (playerData[player].panzaroCoins or 0) + 0
+
+				-- Update PanzaroMaster
+				if _G.SetPlayerPanzaro then
+					_G.SetPlayerPanzaro(player, playerData[player].panzaroCoins)
+				end
+
+				print("[SHOP SERVER] Gave", player.Name, "10000 Panzaro")
+			end
+
+			-- Reset Data Command
+		elseif message:lower() == "/resetdata" then
+			playerData[player] = nil
+			activePlayerSkins[player] = nil
+			playerHasCustomSelections[player] = nil
+			serverResetMorph(player)
+			loadPlayerData(player)
+			print("[SHOP SERVER] Reset data for", player.Name)
+
+			-- Reset Morph Command
+		elseif message:lower() == "/resetmorph" then
+			serverResetMorph(player)
+			print("[SHOP SERVER] Reset morph for", player.Name)
+
+			-- Debug Data Command
+		elseif message:lower() == "/debugdata" then
+			if playerData[player] then
+				print("[SHOP SERVER] Debug data for", player.Name)
+				print("Owned skins:", playerData[player].ownedSkins)
+				print("Selected skins:", playerData[player].selectedSkins)
+				print("Last equipped skin:", playerData[player].lastEquippedSkin)
+				print("Actually equipped:", activePlayerSkins[player])
+				print("Panzaro:", playerData[player].panzaroCoins or 0)
+				print("Selected Ultimates:", playerData[player].selectedUltimates)
+				print("Has Custom Selections:", playerHasCustomSelections[player] or false)
+				print("Mythic Uses:", playerData[player].mythicUses or 0) -- NEU
+				print("Active Mythic:", playerData[player].activeMythicUltimate or "none") -- NEU
+			end
+
+			-- Save Command - Manueller Save
+		elseif message:lower() == "/saveskin" then
+			if playerData[player] then
+				if activePlayerSkins[player] then
+					playerData[player].lastEquippedSkin = activePlayerSkins[player]
+				end
+				savePlayerData(player)
+				print("[SHOP SERVER] Manually saved skin:", playerData[player].lastEquippedSkin or "none")
+			end
+
+			-- Reset Ultimates Command
+		elseif message:lower() == "/resetultimates" then
+			if playerData[player] then
+				playerData[player].selectedUltimates = {}
+				for epoch, ultimateName in pairs(DEFAULT_ULTIMATES) do
+					playerData[player].selectedUltimates[epoch] = ultimateName
+				end
+				playerHasCustomSelections[player] = false
+				savePlayerData(player)
+				print("[SHOP SERVER] Reset ultimates to defaults for", player.Name)
+			end
+
+			-- Ultimate Info Command
+		elseif message:lower() == "/ultimateinfo" then
+			local data = playerData[player]
+			if data then
+				print("[SHOP] Ultimate Info for", player.Name)
+				print("  Selected Ultimates:")
+				for epoch, ultimate in pairs(data.selectedUltimates or {}) do
+					print("    ", epoch, ":", ultimate)
+				end
+				print("  Has Custom Selections:", playerHasCustomSelections[player] or false)
+				print("  Owned Ultimates:")
+				for ultimate, owned in pairs(data.ownedUltimates or {}) do
+					if owned then
+						print("    -", ultimate)
+					end
+				end
+			end
+		end
+	end)
+end)
+
+-- ===== GLOBAL FUNCTIONS FOR LOBBY SYSTEM =====
+
+_G.GetPlayerUltimateData = function(player)
+	local data = playerData[player]
+	if not data then return nil end
+
+	return {
+		selectedUltimates = data.selectedUltimates or {},
+		selectedSpecialUltimate = data.activeMythicUltimate,
+		superUltimateRounds = 0,
+		activeMythicUltimate = data.activeMythicUltimate,
+		mythicUses = data.mythicUses or 0 -- NEU: Uses mitschicken!
+	}
+end
+
+_G.GetPlayerSkinData = function(player)
+	local data = playerData[player]
+	if not data then return {} end
+
+	return {
+		equippedSkin = activePlayerSkins[player] or data.lastEquippedSkin,
+		lastEquippedSkin = data.lastEquippedSkin,
+		ownedSkins = data.ownedSkins or {},
+		selectedSkins = data.selectedSkins or {}
+	}
+end
+
+print("[FIXED SHOP SERVER] Loaded with persistent skin save!")
+print("Default Ultimates:")
+for epoch, ultimate in pairs(DEFAULT_ULTIMATES) do
+	print("  ", epoch, ":", ultimate)
+end
+print("Commands: /checkskin, /forceskin, /saveskin, /debugdata, /givepanzaro")

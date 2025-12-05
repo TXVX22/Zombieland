@@ -1,0 +1,601 @@
+-- LobbySystem.lua (UPDATED WITH INSANE DIFFICULTY)
+-- Platzierung: ServerScriptService/LobbySystem (Script)
+
+-- Singleton Check
+if _G.LobbySystemRunning then
+	warn("[LOBBY SYSTEM] Already running! Stopping duplicate instance.")
+	return
+end
+_G.LobbySystemRunning = true
+
+local Players = game:GetService("Players")
+local TeleportService = game:GetService("TeleportService")
+local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+-- Place IDs für deine Experiences
+local MULTIPLAYER_PLACE_ID = 111349136342230
+local SINGLEPLAYER_PLACE_ID = 100552336186891  -- KORRIGIERTE ID!
+
+-- Debug Mode
+local DEBUG_MODE = true
+
+local function debugPrint(message)
+	if DEBUG_MODE then
+		print("[LOBBY DEBUG] " .. message)
+	end
+end
+
+-- Matchmaking Warteschlange
+local matchmakingQueue = {}
+local playerTimers = {}
+local playersInMultiArea = {}
+local playersInSingleArea = {}
+local promptsSent = {}
+local playersWithActivePrompt = {} -- NEU: Track wer bereits ein Prompt hat
+local playersInCountdown = {} -- NEU: Track wer im Countdown ist
+
+-- Clean existing RemoteEvents (aber behalte VIPMessage)
+local existingRemotes = ReplicatedStorage:FindFirstChild("LobbyRemotes")
+local existingVIPMessage = nil
+if existingRemotes then
+	existingVIPMessage = existingRemotes:FindFirstChild("VIPMessage")
+	if existingVIPMessage then
+		existingVIPMessage.Parent = ReplicatedStorage
+	end
+	existingRemotes:Destroy()
+	wait(0.1)
+end
+
+-- Remote Events erstellen
+local remotes = Instance.new("Folder")
+remotes.Name = "LobbyRemotes"
+remotes.Parent = ReplicatedStorage
+
+local showMultiplayerPrompt = Instance.new("RemoteEvent")
+showMultiplayerPrompt.Name = "ShowMultiplayerPrompt"
+showMultiplayerPrompt.Parent = remotes
+
+local showSingleplayerPrompt = Instance.new("RemoteEvent")
+showSingleplayerPrompt.Name = "ShowSingleplayerPrompt"
+showSingleplayerPrompt.Parent = remotes
+
+local playerResponse = Instance.new("RemoteEvent")
+playerResponse.Name = "PlayerResponse"
+playerResponse.Parent = remotes
+
+local cancelMatchmaking = Instance.new("RemoteEvent")
+cancelMatchmaking.Name = "CancelMatchmaking"
+cancelMatchmaking.Parent = remotes
+
+local forcePrompt = Instance.new("RemoteEvent")
+forcePrompt.Name = "ForcePrompt"
+forcePrompt.Parent = remotes
+
+-- VIPMessage wieder hinzufügen
+if existingVIPMessage then
+	existingVIPMessage.Parent = remotes
+else
+	local vipMessageRemote = Instance.new("RemoteEvent")
+	vipMessageRemote.Name = "VIPMessage"
+	vipMessageRemote.Parent = remotes
+end
+
+local showLoadingScreen = Instance.new("RemoteEvent")
+showLoadingScreen.Name = "ShowLoadingScreen"
+showLoadingScreen.Parent = remotes
+
+debugPrint("Remote Events created fresh")
+
+-- Warte auf Areas
+local multiplayerArea = workspace:WaitForChild("Multiplayer", 10)
+local singleplayerArea = workspace:WaitForChild("Singleplayer", 10)
+
+if not multiplayerArea or not singleplayerArea then
+	error("Multiplayer oder Singleplayer Folder nicht gefunden!")
+	return
+end
+
+debugPrint("Areas found successfully")
+
+-- Difficulty zu Game-Schwierigkeit mapping
+local DIFFICULTY_MAPPING = {
+	["easy"] = "EASY",
+	["medium"] = "MEDIUM",
+	["hard"] = "HARD",
+	["insane"] = "INSANE"  -- NEU!
+}
+
+-- Helper functions
+local function isPlayerInArea(player, area)
+	local character = player.Character
+	if not character then return false end
+
+	local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
+	if not humanoidRootPart then return false end
+
+	for _, part in ipairs(area:GetDescendants()) do
+		if part:IsA("BasePart") then
+			local distance = (part.Position - humanoidRootPart.Position).Magnitude
+			if distance <= 30 then
+				return true
+			end
+		end
+	end
+
+	return false
+end
+
+local function sendPromptWithRetry(player, promptType, retries)
+	retries = retries or 0
+
+	-- NEU: Check ob Spieler bereits ein Prompt hat oder im Countdown/Matchmaking ist
+	if playersWithActivePrompt[player] then
+		debugPrint("Player " .. player.Name .. " already has an active prompt, skipping")
+		return
+	end
+
+	if playersInCountdown[player] then
+		debugPrint("Player " .. player.Name .. " is in countdown, skipping")
+		return
+	end
+
+	-- Check ob bereits in Matchmaking
+	for _, queuedPlayer in ipairs(matchmakingQueue) do
+		if queuedPlayer == player then
+			debugPrint("Player " .. player.Name .. " is in matchmaking, skipping")
+			return
+		end
+	end
+
+	if retries >= 3 then
+		debugPrint("Max retries reached for " .. player.Name)
+		return
+	end
+
+	if promptsSent[player] and promptsSent[player][promptType] then
+		debugPrint("Prompt already sent to " .. player.Name .. " for " .. promptType)
+		return
+	end
+
+	debugPrint("Sending " .. promptType .. " prompt to " .. player.Name .. " (attempt " .. (retries + 1) .. ")")
+
+	-- NEU: Markiere dass Spieler jetzt ein Prompt hat
+	playersWithActivePrompt[player] = promptType
+
+	if promptType == "multiplayer" then
+		showMultiplayerPrompt:FireClient(player)
+	elseif promptType == "singleplayer" then
+		showSingleplayerPrompt:FireClient(player)
+	end
+
+	if not promptsSent[player] then
+		promptsSent[player] = {}
+	end
+	promptsSent[player][promptType] = true
+
+	task.wait(2)
+
+	if player.Parent and not player.PlayerGui:FindFirstChild(promptType == "multiplayer" and "MultiplayerPrompt" or "SingleplayerPrompt") then
+		debugPrint("GUI not found, retrying for " .. player.Name)
+		promptsSent[player][promptType] = nil
+		sendPromptWithRetry(player, promptType, retries + 1)
+	end
+end
+
+-- Helper functions für Ultimate und Skin Daten
+local function getPlayerUltimateData(player)
+	if _G.GetPlayerUltimateData then
+		local data = _G.GetPlayerUltimateData(player)
+
+		if data and player then
+			local shopRemotes = ReplicatedStorage:FindFirstChild("ShopRemotes")
+			if shopRemotes then
+				local getPlayerData = shopRemotes:FindFirstChild("GetPlayerData")
+				if getPlayerData and getPlayerData:IsA("RemoteFunction") then
+					local success, shopData = pcall(function()
+						return getPlayerData:InvokeServer()
+					end)
+
+					if success and shopData then
+						if shopData.activeMythicUltimate then
+							data.activeMythicUltimate = shopData.activeMythicUltimate
+							debugPrint("Player has active mythic ultimate: " .. shopData.activeMythicUltimate)
+						end
+
+						if shopData.mythicUses then
+							data.mythicUses = shopData.mythicUses
+							debugPrint("Player has mythic uses: " .. shopData.mythicUses)
+						end
+
+						if shopData.superUltimateRounds then
+							data.superUltimateRounds = shopData.superUltimateRounds
+						end
+					end
+				end
+			end
+		end
+
+		return data
+	end
+	return nil
+end
+
+local function getPlayerSkinData(player)
+	if _G.GetPlayerSkinData then
+		return _G.GetPlayerSkinData(player)
+	end
+	return nil
+end
+
+-- Player Response Handler
+playerResponse.OnServerEvent:Connect(function(player, responseType, difficulty)
+	debugPrint("Response from " .. player.Name .. ": " .. responseType .. (difficulty and " (" .. difficulty .. ")" or ""))
+
+	-- NEU: Handle prompt cancellation
+	if responseType == "prompt_cancelled" then
+		playersWithActivePrompt[player] = nil
+		if promptsSent[player] and difficulty then
+			promptsSent[player][difficulty] = nil
+		end
+		debugPrint("Prompt cancelled by " .. player.Name .. " for " .. (difficulty or "unknown"))
+		return
+	end
+
+	-- NEU: Clear active prompt
+	playersWithActivePrompt[player] = nil
+
+	-- Reset prompt tracking
+	if promptsSent[player] then
+		promptsSent[player] = nil
+	end
+
+	if responseType == "multiplayer_accept" then
+		debugPrint("Adding " .. player.Name .. " to matchmaking queue")
+
+		if _G.SetPlayerInMatchmaking then
+			_G.SetPlayerInMatchmaking(player, true)
+		end
+
+		table.insert(matchmakingQueue, player)
+
+		-- Matchmaking UI erstellen
+		local statusGui = Instance.new("ScreenGui")
+		statusGui.Name = "MatchmakingStatus"
+		statusGui.ResetOnSpawn = false
+		statusGui.Parent = player.PlayerGui
+
+		local frame = Instance.new("Frame")
+		frame.Size = UDim2.new(0, 300, 0, 100)
+		frame.Position = UDim2.new(0.5, -150, 0.1, 0)
+		frame.BackgroundColor3 = Color3.new(0.2, 0.2, 0.2)
+		frame.BorderSizePixel = 0
+		frame.Parent = statusGui
+
+		local text = Instance.new("TextLabel")
+		text.Size = UDim2.new(1, 0, 0.6, 0)
+		text.BackgroundTransparency = 1
+		text.Text = "Suche nach Spieler..."
+		text.TextColor3 = Color3.new(1, 1, 1)
+		text.TextScaled = true
+		text.Font = Enum.Font.SourceSans
+		text.Parent = frame
+
+		local cancelButton = Instance.new("TextButton")
+		cancelButton.Size = UDim2.new(0.8, 0, 0.3, 0)
+		cancelButton.Position = UDim2.new(0.1, 0, 0.65, 0)
+		cancelButton.BackgroundColor3 = Color3.new(0.8, 0.2, 0.2)
+		cancelButton.Text = "Abbrechen"
+		cancelButton.TextColor3 = Color3.new(1, 1, 1)
+		cancelButton.TextScaled = true
+		cancelButton.Font = Enum.Font.SourceSans
+		cancelButton.Parent = frame
+
+		cancelButton.MouseButton1Click:Connect(function()
+			cancelMatchmaking:FireServer()
+		end)
+
+		-- Check for match
+		if #matchmakingQueue >= 2 then
+			debugPrint("Found match! Starting game...")
+
+			local player1 = matchmakingQueue[1]
+			local player2 = matchmakingQueue[2]
+
+			table.remove(matchmakingQueue, 1)
+			table.remove(matchmakingQueue, 1)
+
+			-- Update status
+			if player1.PlayerGui:FindFirstChild("MatchmakingStatus") then
+				local statusText = player1.PlayerGui.MatchmakingStatus.Frame.TextLabel
+				statusText.Text = "Match gefunden! Teleportiere..."
+			end
+			if player2.PlayerGui:FindFirstChild("MatchmakingStatus") then
+				local statusText = player2.PlayerGui.MatchmakingStatus.Frame.TextLabel
+				statusText.Text = "Match gefunden! Teleportiere..."
+			end
+
+			wait(1)
+
+			-- Prepare teleport data
+			local teleportOptions = Instance.new("TeleportOptions")
+			local teleportData = {}
+
+			-- Player 1 data
+			local ultimateData1 = getPlayerUltimateData(player1)
+			local skinData1 = getPlayerSkinData(player1)
+
+			teleportData[tostring(player1.UserId)] = {
+				selectedUltimates = ultimateData1 and ultimateData1.selectedUltimates or {},
+				selectedSpecialUltimate = ultimateData1 and ultimateData1.selectedSpecialUltimate,
+				superUltimateRounds = ultimateData1 and ultimateData1.superUltimateRounds or 0,
+				activeMythicUltimate = ultimateData1 and ultimateData1.activeMythicUltimate,
+				mythicUses = ultimateData1 and ultimateData1.mythicUses or 0,
+				equippedSkin = skinData1 and skinData1.equippedSkin,
+				lastEquippedSkin = skinData1 and skinData1.lastEquippedSkin,
+				ownedSkins = skinData1 and skinData1.ownedSkins,
+				selectedSkins = skinData1 and skinData1.selectedSkins
+			}
+
+			teleportData[player1.UserId] = teleportData[tostring(player1.UserId)]
+			teleportData[player1.Name] = teleportData[tostring(player1.UserId)]
+
+			-- Player 2 data
+			local ultimateData2 = getPlayerUltimateData(player2)
+			local skinData2 = getPlayerSkinData(player2)
+
+			teleportData[tostring(player2.UserId)] = {
+				selectedUltimates = ultimateData2 and ultimateData2.selectedUltimates or {},
+				selectedSpecialUltimate = ultimateData2 and ultimateData2.selectedSpecialUltimate,
+				superUltimateRounds = ultimateData2 and ultimateData2.superUltimateRounds or 0,
+				activeMythicUltimate = ultimateData2 and ultimateData2.activeMythicUltimate,
+				mythicUses = ultimateData2 and ultimateData2.mythicUses or 0,
+				equippedSkin = skinData2 and skinData2.equippedSkin,
+				lastEquippedSkin = skinData2 and skinData2.lastEquippedSkin,
+				ownedSkins = skinData2 and skinData2.ownedSkins,
+				selectedSkins = skinData2 and skinData2.selectedSkins
+			}
+
+			teleportData[player2.UserId] = teleportData[tostring(player2.UserId)]
+			teleportData[player2.Name] = teleportData[tostring(player2.UserId)]
+
+			debugPrint("Teleport data prepared")
+
+			teleportOptions:SetTeleportData(teleportData)
+
+			local success, errorMsg = pcall(function()
+				TeleportService:TeleportAsync(MULTIPLAYER_PLACE_ID, {player1, player2}, teleportOptions)
+			end)
+
+			if not success then
+				warn("Teleport failed: " .. errorMsg)
+				if player1.PlayerGui:FindFirstChild("MatchmakingStatus") then
+					player1.PlayerGui.MatchmakingStatus:Destroy()
+				end
+				if player2.PlayerGui:FindFirstChild("MatchmakingStatus") then
+					player2.PlayerGui.MatchmakingStatus:Destroy()
+				end
+			end
+		end
+
+	elseif responseType == "singleplayer_start" and difficulty then
+		debugPrint("Starting singleplayer for " .. player.Name .. " with difficulty: " .. difficulty)
+		
+		-- NEU: Markiere als im Countdown
+		playersInCountdown[player] = true
+
+		if _G.SetPlayerInMatchmaking then
+			_G.SetPlayerInMatchmaking(player, false)
+		end
+
+		wait(0.5)
+
+		-- Map difficulty to game difficulty
+		local gameDifficulty = DIFFICULTY_MAPPING[difficulty] or "NORMAL"
+
+		-- NEU: Debug output
+		print("[LOBBY] ===== DIFFICULTY DEBUG =====")
+		print("[LOBBY] Input difficulty:", difficulty)
+		print("[LOBBY] Mapped to:", gameDifficulty)
+		print("[LOBBY] ================================")
+
+		-- Teleport to singleplayer with difficulty and skin data
+		local teleportData = {
+			Difficulty = gameDifficulty  -- WICHTIG: Großes D für Difficulty!
+		}
+
+		-- Add ultimate and skin data
+		local playerUltimateData = getPlayerUltimateData(player)
+		local playerSkinData = getPlayerSkinData(player)
+
+		if playerUltimateData then
+			teleportData.selectedUltimates = playerUltimateData.selectedUltimates or {}
+			teleportData.selectedSpecialUltimate = playerUltimateData.selectedSpecialUltimate
+			teleportData.superUltimateRounds = playerUltimateData.superUltimateRounds or 0
+			teleportData.activeMythicUltimate = playerUltimateData.activeMythicUltimate
+			teleportData.mythicUses = playerUltimateData.mythicUses or 0
+		end
+
+		if playerSkinData then
+			teleportData.equippedSkin = playerSkinData.equippedSkin
+			teleportData.lastEquippedSkin = playerSkinData.lastEquippedSkin
+			teleportData.ownedSkins = playerSkinData.ownedSkins
+			teleportData.selectedSkins = playerSkinData.selectedSkins
+		end
+
+		teleportData[tostring(player.UserId)] = {
+			selectedUltimates = teleportData.selectedUltimates,
+			selectedSpecialUltimate = teleportData.selectedSpecialUltimate,
+			superUltimateRounds = teleportData.superUltimateRounds,
+			activeMythicUltimate = teleportData.activeMythicUltimate,
+			mythicUses = teleportData.mythicUses or 0,
+			equippedSkin = teleportData.equippedSkin,
+			lastEquippedSkin = teleportData.lastEquippedSkin,
+			ownedSkins = teleportData.ownedSkins,
+			selectedSkins = teleportData.selectedSkins
+		}
+
+		teleportData[player.UserId] = teleportData[tostring(player.UserId)]
+		teleportData[player.Name] = teleportData[tostring(player.UserId)]
+
+		local teleportOptions = Instance.new("TeleportOptions")
+		teleportOptions:SetTeleportData(teleportData)
+
+		debugPrint("Teleporting " .. player.Name .. " to singleplayer with difficulty: " .. gameDifficulty)
+
+		local success, errorMsg = pcall(function()
+			TeleportService:TeleportAsync(SINGLEPLAYER_PLACE_ID, {player}, teleportOptions)
+		end)
+
+		if not success then
+			warn("Teleport failed: " .. errorMsg)
+		end
+	end
+end)
+
+-- Area Check Loop
+local areaCheckConnection
+areaCheckConnection = RunService.Heartbeat:Connect(function()
+	for _, player in ipairs(Players:GetPlayers()) do
+		local character = player.Character
+		if not character then continue end
+
+		-- Check Multiplayer Area
+		local inMultiArea = isPlayerInArea(player, multiplayerArea)
+
+		if inMultiArea and not playersInMultiArea[player] then
+			playersInMultiArea[player] = tick()
+			debugPrint("Player " .. player.Name .. " entered MultiArea")
+
+		elseif inMultiArea and playersInMultiArea[player] and not playerTimers[player] then
+			if tick() - playersInMultiArea[player] >= 1 then
+				playerTimers[player] = true
+				coroutine.wrap(function()
+					sendPromptWithRetry(player, "multiplayer")
+				end)()
+			end
+
+		elseif not inMultiArea and playersInMultiArea[player] then
+			playersInMultiArea[player] = nil
+			playerTimers[player] = nil
+			-- NEU: Reset prompt tracking when leaving area
+			if promptsSent[player] then
+				promptsSent[player]["multiplayer"] = nil
+			end
+			debugPrint("Player " .. player.Name .. " left MultiArea")
+		end
+
+		-- Check Singleplayer Area
+		local inSingleArea = isPlayerInArea(player, singleplayerArea)
+
+		if inSingleArea and not playersInSingleArea[player] then
+			playersInSingleArea[player] = tick()
+			debugPrint("Player " .. player.Name .. " entered SingleArea")
+
+		elseif inSingleArea and playersInSingleArea[player] and not playerTimers[player] then
+			if tick() - playersInSingleArea[player] >= 1 then
+				playerTimers[player] = true
+				coroutine.wrap(function()
+					sendPromptWithRetry(player, "singleplayer")
+				end)()
+			end
+
+		elseif not inSingleArea and playersInSingleArea[player] then
+			playersInSingleArea[player] = nil
+			playerTimers[player] = nil
+			-- NEU: Reset prompt tracking when leaving area
+			if promptsSent[player] then
+				promptsSent[player]["singleplayer"] = nil
+			end
+			playersWithActivePrompt[player] = nil -- NEU: Auch active prompt clearen
+			debugPrint("Player " .. player.Name .. " left SingleArea")
+		end
+	end
+end)
+
+-- Cancel Matchmaking Handler
+cancelMatchmaking.OnServerEvent:Connect(function(player)
+	debugPrint("Matchmaking cancelled by " .. player.Name)
+
+	if _G.SetPlayerInMatchmaking then
+		_G.SetPlayerInMatchmaking(player, false)
+	end
+
+	for i, queuedPlayer in ipairs(matchmakingQueue) do
+		if queuedPlayer == player then
+			table.remove(matchmakingQueue, i)
+			debugPrint("Player " .. player.Name .. " removed from queue")
+			break
+		end
+	end
+
+	if player.PlayerGui:FindFirstChild("MatchmakingStatus") then
+		player.PlayerGui.MatchmakingStatus:Destroy()
+	end
+end)
+
+-- Force Prompt Handler
+forcePrompt.OnServerEvent:Connect(function(player, promptType)
+	debugPrint("Force prompt requested by " .. player.Name .. " for " .. promptType)
+
+	if promptType == "multiplayer" then
+		sendPromptWithRetry(player, "multiplayer")
+	elseif promptType == "singleplayer" then
+		sendPromptWithRetry(player, "singleplayer")
+	end
+end)
+
+-- Player cleanup
+Players.PlayerRemoving:Connect(function(player)
+	-- NEU: Cleanup active prompt tracking
+	playersWithActivePrompt[player] = nil
+	playersInCountdown[player] = nil
+
+	if _G.SetPlayerInMatchmaking then
+		_G.SetPlayerInMatchmaking(player, false)
+	end
+
+	for i, queuedPlayer in ipairs(matchmakingQueue) do
+		if queuedPlayer == player then
+			table.remove(matchmakingQueue, i)
+			debugPrint("Player " .. player.Name .. " removed from queue (leaving)")
+			break
+		end
+	end
+
+	playerTimers[player] = nil
+	playersInMultiArea[player] = nil
+	playersInSingleArea[player] = nil
+	promptsSent[player] = nil
+end)
+
+-- Debug Commands
+Players.PlayerAdded:Connect(function(player)
+	player.Chatted:Connect(function(msg)
+		if msg:lower() == "/forcemulti" then
+			debugPrint("Forcing multiplayer prompt for " .. player.Name)
+			sendPromptWithRetry(player, "multiplayer")
+		elseif msg:lower() == "/forcesingle" then
+			debugPrint("Forcing singleplayer prompt for " .. player.Name)
+			sendPromptWithRetry(player, "singleplayer")
+		elseif msg:lower() == "/debuglobby" then
+			print("[LOBBY DEBUG] Status for", player.Name)
+			print("  In MultiArea:", playersInMultiArea[player] ~= nil)
+			print("  In SingleArea:", playersInSingleArea[player] ~= nil)
+			print("  Timer active:", playerTimers[player] ~= nil)
+			print("  Queue size:", #matchmakingQueue)
+		end
+	end)
+end)
+
+debugPrint("Lobby System fully loaded!")
+
+-- Cleanup on script stop
+script.AncestryChanged:Connect(function()
+	if not script.Parent then
+		_G.LobbySystemRunning = false
+		if areaCheckConnection then
+			areaCheckConnection:Disconnect()
+		end
+	end
+end)

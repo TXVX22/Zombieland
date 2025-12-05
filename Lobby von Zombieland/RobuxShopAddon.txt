@@ -1,0 +1,348 @@
+-- ROBUX SHOP CLIENT ADDON
+-- Location: StarterPlayer/StarterPlayerScripts/RobuxShopAddon (LocalScript)
+-- This extends your existing LobbyMorphClient with Robux purchase options
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local MarketplaceService = game:GetService("MarketplaceService")
+
+local player = Players.LocalPlayer
+
+-- Wait for remotes
+local remotesFolder = ReplicatedStorage:WaitForChild("ShopRemotes")
+local robuxPurchase = remotesFolder:WaitForChild("RobuxPurchase")
+local getRobuxPrices = remotesFolder:WaitForChild("GetRobuxPrices")
+
+-- Get Robux prices from server
+local robuxPrices = getRobuxPrices:InvokeServer()
+
+-- Colors (same as your main client)
+local COLORS = {
+	ROBUX_GREEN = Color3.fromRGB(46, 204, 113),
+	PANZARO_GOLD = Color3.fromRGB(241, 196, 15),
+	BACKGROUND = Color3.fromRGB(20, 25, 40),
+	TEXT = Color3.fromRGB(255, 255, 255),
+	ERROR = Color3.fromRGB(231, 76, 60),
+	SUCCESS = Color3.fromRGB(46, 204, 113)
+}
+
+-- Function to create dual purchase button (Panzaro + Robux)
+function _G.CreateDualPurchaseButton(parent, item, itemType, position, size, isMobile)
+	local container = Instance.new("Frame")
+	container.Size = size or UDim2.new(0, 200, 0, 40)
+	container.Position = position
+	container.BackgroundTransparency = 1
+	container.Parent = parent
+
+	-- Calculate prices
+	local panzaroPrice = 0
+	local robuxPrice = 0
+
+	if itemType == "skin" then
+		local skinData = require(ReplicatedStorage:WaitForChild("SoldierSkinData")):GetSkin(item)
+		if skinData then
+			panzaroPrice = skinData.panzaroPrice or 100
+			robuxPrice = robuxPrices["skin_" .. item] or 59
+		end
+	elseif itemType == "ultimate" then
+		local ultimateData = require(ReplicatedStorage:WaitForChild("UltimateData")):GetUltimate(item)
+		if ultimateData then
+			panzaroPrice = ultimateData.panzaroPrice or 100
+			robuxPrice = robuxPrices["ultimate_" .. item] or 99
+		end
+	end
+
+	-- Panzaro Button (Left)
+	local panzaroButton = Instance.new("TextButton")
+	panzaroButton.Size = UDim2.new(0.48, 0, 1, 0)
+	panzaroButton.Position = UDim2.new(0, 0, 0, 0)
+	panzaroButton.BackgroundColor3 = COLORS.PANZARO_GOLD
+	panzaroButton.BackgroundTransparency = 0.2
+	panzaroButton.Text = ""
+	panzaroButton.Parent = container
+
+	local panzaroCorner = Instance.new("UICorner")
+	panzaroCorner.CornerRadius = UDim.new(0, 6)
+	panzaroCorner.Parent = panzaroButton
+
+	-- Panzaro Icon and Price
+	local panzaroIcon = Instance.new("ImageLabel")
+	panzaroIcon.Size = isMobile and UDim2.new(0, 18, 0, 18) or UDim2.new(0, 20, 0, 20)
+	panzaroIcon.Position = UDim2.new(0, 5, 0.5, 0)
+	panzaroIcon.AnchorPoint = Vector2.new(0, 0.5)
+	panzaroIcon.BackgroundTransparency = 1
+	panzaroIcon.Image = "rbxassetid://110387047670855"
+	panzaroIcon.ScaleType = Enum.ScaleType.Fit
+	panzaroIcon.Parent = panzaroButton
+
+	local panzaroLabel = Instance.new("TextLabel")
+	panzaroLabel.Size = UDim2.new(1, -30, 1, 0)
+	panzaroLabel.Position = UDim2.new(0, 28, 0, 0)
+	panzaroLabel.BackgroundTransparency = 1
+	panzaroLabel.Text = tostring(panzaroPrice)
+	panzaroLabel.TextColor3 = Color3.fromRGB(20, 20, 20)
+	panzaroLabel.TextScaled = true
+	panzaroLabel.Font = Enum.Font.GothamBold
+	panzaroLabel.Parent = panzaroButton
+
+	-- Robux Button (Right)
+	local robuxButton = Instance.new("TextButton")
+	robuxButton.Size = UDim2.new(0.48, 0, 1, 0)
+	robuxButton.Position = UDim2.new(0.52, 0, 0, 0)
+	robuxButton.BackgroundColor3 = COLORS.ROBUX_GREEN
+	robuxButton.BackgroundTransparency = 0.2
+	robuxButton.Text = ""
+	robuxButton.Parent = container
+
+	local robuxCorner = Instance.new("UICorner")
+	robuxCorner.CornerRadius = UDim.new(0, 6)
+	robuxCorner.Parent = robuxButton
+
+	-- Robux Icon and Price
+	local robuxIcon = Instance.new("ImageLabel")
+	robuxIcon.Size = isMobile and UDim2.new(0, 18, 0, 18) or UDim2.new(0, 20, 0, 20)
+	robuxIcon.Position = UDim2.new(0, 5, 0.5, 0)
+	robuxIcon.AnchorPoint = Vector2.new(0, 0.5)
+	robuxIcon.BackgroundTransparency = 1
+	robuxIcon.Image = "rbxasset://textures/ui/common/robux.png"
+	robuxIcon.ScaleType = Enum.ScaleType.Fit
+	robuxIcon.Parent = robuxButton
+
+	local robuxLabel = Instance.new("TextLabel")
+	robuxLabel.Size = UDim2.new(1, -30, 1, 0)
+	robuxLabel.Position = UDim2.new(0, 28, 0, 0)
+	robuxLabel.BackgroundTransparency = 1
+	robuxLabel.Text = tostring(robuxPrice)
+	robuxLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+	robuxLabel.TextScaled = true
+	robuxLabel.Font = Enum.Font.GothamBold
+	robuxLabel.Parent = robuxButton
+
+	-- Click handlers
+	panzaroButton.MouseButton1Click:Connect(function()
+		local shopRemotes = ReplicatedStorage:WaitForChild("ShopRemotes")
+		local buyItem = shopRemotes:WaitForChild("BuyItem")
+
+		local success, message = buyItem:InvokeServer(itemType, item)
+		if success then
+			-- Zeige Erfolg
+			panzaroButton.BackgroundColor3 = COLORS.SUCCESS
+			panzaroButton.Text = "✓"
+			wait(0.3)
+
+			-- Ersetze den Container mit einem SELECT/EQUIP Button
+			container:Destroy()
+
+			-- Erstelle neuen Button basierend auf Item-Typ
+			if itemType == "ultimate" then
+				local selectButton = Instance.new("TextButton")
+				selectButton.Size = size
+				selectButton.Position = position
+				selectButton.BackgroundColor3 = Color3.fromRGB(231, 76, 60) -- ACCENT color
+				selectButton.Text = "SELECT"
+				selectButton.TextColor3 = COLORS.TEXT
+				selectButton.TextScaled = true
+				selectButton.Font = Enum.Font.GothamBold
+				selectButton.Parent = parent
+
+				local selectCorner = Instance.new("UICorner")
+				selectCorner.CornerRadius = UDim.new(0, 6)
+				selectCorner.Parent = selectButton
+
+				selectButton.MouseButton1Click:Connect(function()
+					-- Get current tab from parent hierarchy
+					local currentTab = parent.Parent.Parent:FindFirstChild("CurrentTab")
+					if currentTab then
+						local tabValue = currentTab.Value
+						local selectUltimate = shopRemotes:WaitForChild("SelectUltimate")
+						local success2 = selectUltimate:InvokeServer(tabValue, item)
+						if success2 and _G.RefreshShopUI then
+							_G.RefreshShopUI()
+						end
+					end
+				end)
+
+			elseif itemType == "skin" then
+				local equipButton = Instance.new("TextButton")
+				equipButton.Size = size
+				equipButton.Position = position
+				equipButton.BackgroundColor3 = Color3.fromRGB(231, 76, 60) -- ACCENT color
+				equipButton.Text = "EQUIP"
+				equipButton.TextColor3 = COLORS.TEXT
+				equipButton.TextScaled = true
+				equipButton.Font = Enum.Font.GothamBold
+				equipButton.Parent = parent
+
+				local equipCorner = Instance.new("UICorner")
+				equipCorner.CornerRadius = UDim.new(0, 6)
+				equipCorner.Parent = equipButton
+
+				equipButton.MouseButton1Click:Connect(function()
+					local equipSkin = shopRemotes:WaitForChild("EquipSkin")
+					local success2 = equipSkin:InvokeServer(item)
+					if success2 and _G.RefreshShopUI then
+						_G.RefreshShopUI()
+					end
+				end)
+			end
+		else
+			panzaroButton.BackgroundColor3 = COLORS.ERROR
+			wait(0.5)
+			panzaroButton.BackgroundColor3 = COLORS.PANZARO_GOLD
+		end
+	end)
+
+
+	robuxButton.MouseButton1Click:Connect(function()
+		-- Robux purchase
+		local success, message = robuxPurchase:InvokeServer(itemType, item)
+		if not success then
+			robuxButton.BackgroundColor3 = COLORS.ERROR
+			wait(0.5)
+			robuxButton.BackgroundColor3 = COLORS.ROBUX_GREEN
+		end
+	end)
+
+	return container
+end
+
+-- Function to create Panzaro shop tab
+function _G.CreatePanzaroShopTab(parent, yPos, isMobile)
+	local packages = robuxPrices.panzaro_packages or {
+		{amount = 100, robux = 25},
+		{amount = 500, robux = 99},
+		{amount = 1000, robux = 179},
+		{amount = 5000, robux = 799},
+		{amount = 10000, robux = 1499}
+	}
+
+	-- Header
+	local headerCard = Instance.new("Frame")
+	headerCard.Size = UDim2.new(1, -10, 0, 100)
+	headerCard.Position = UDim2.new(0, 5, 0, yPos)
+	headerCard.BackgroundColor3 = Color3.fromRGB(30, 35, 55)
+	headerCard.Parent = parent
+
+	local headerCorner = Instance.new("UICorner")
+	headerCorner.CornerRadius = UDim.new(0, 8)
+	headerCorner.Parent = headerCard
+
+	local headerTitle = Instance.new("TextLabel")
+	headerTitle.Size = UDim2.new(1, -20, 0, 40)
+	headerTitle.Position = UDim2.new(0, 10, 0, 10)
+	headerTitle.BackgroundTransparency = 1
+	headerTitle.Text = "💰 PANZARO PACKAGES"
+	headerTitle.TextColor3 = COLORS.PANZARO_GOLD
+	headerTitle.TextScaled = true
+	headerTitle.Font = Enum.Font.GothamBold
+	headerTitle.Parent = headerCard
+
+	local headerDesc = Instance.new("TextLabel")
+	headerDesc.Size = UDim2.new(1, -20, 0, 30)
+	headerDesc.Position = UDim2.new(0, 10, 0, 50)
+	headerDesc.BackgroundTransparency = 1
+	headerDesc.Text = "Get more Panzaro with Robux!"
+	headerDesc.TextColor3 = Color3.fromRGB(200, 200, 200)
+	headerDesc.TextScaled = true
+	headerDesc.Font = Enum.Font.Gotham
+	headerDesc.Parent = headerCard
+
+	yPos = yPos + 110
+
+	-- Package cards
+	for _, package in ipairs(packages) do
+		local card = Instance.new("Frame")
+		card.Size = UDim2.new(1, -10, 0, 80)
+		card.Position = UDim2.new(0, 5, 0, yPos)
+		card.BackgroundColor3 = Color3.fromRGB(30, 35, 55)
+		card.Parent = parent
+
+		local cardCorner = Instance.new("UICorner")
+		cardCorner.CornerRadius = UDim.new(0, 8)
+		cardCorner.Parent = card
+
+		-- Panzaro amount
+		local amountLabel = Instance.new("TextLabel")
+		amountLabel.Size = UDim2.new(0.3, 0, 1, 0)
+		amountLabel.Position = UDim2.new(0, 20, 0, 0)
+		amountLabel.BackgroundTransparency = 1
+		amountLabel.Text = package.amount .. " Panzaro"
+		amountLabel.TextColor3 = COLORS.PANZARO_GOLD
+		amountLabel.TextScaled = true
+		amountLabel.Font = Enum.Font.GothamBold
+		amountLabel.TextXAlignment = Enum.TextXAlignment.Left
+		amountLabel.Parent = card
+
+		-- Bonus label for larger packages
+		if package.amount >= 5000 then
+			local bonusLabel = Instance.new("TextLabel")
+			bonusLabel.Size = UDim2.new(0, 80, 0, 25)
+			bonusLabel.Position = UDim2.new(0.35, 0, 0.5, -12)
+			bonusLabel.BackgroundColor3 = Color3.fromRGB(255, 100, 0)
+			bonusLabel.Text = "BEST VALUE"
+			bonusLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+			bonusLabel.TextScaled = true
+			bonusLabel.Font = Enum.Font.SourceSansBold
+			bonusLabel.Parent = card
+
+			local bonusCorner = Instance.new("UICorner")
+			bonusCorner.CornerRadius = UDim.new(0, 4)
+			bonusCorner.Parent = bonusLabel
+		end
+
+		-- Buy button
+		local buyButton = Instance.new("TextButton")
+		buyButton.Size = UDim2.new(0, 120, 0, 50)
+		buyButton.Position = UDim2.new(1, -140, 0.5, -25)
+		buyButton.BackgroundColor3 = COLORS.ROBUX_GREEN
+		buyButton.Text = ""
+		buyButton.Parent = card
+
+		local buyCorner = Instance.new("UICorner")
+		buyCorner.CornerRadius = UDim.new(0, 6)
+		buyCorner.Parent = buyButton
+
+		local robuxIcon = Instance.new("ImageLabel")
+		robuxIcon.Size = UDim2.new(0, 30, 0, 30)
+		robuxIcon.Position = UDim2.new(0, 10, 0.5, -15)
+		robuxIcon.BackgroundTransparency = 1
+		robuxIcon.Image = "rbxasset://textures/ui/common/robux.png"
+		robuxIcon.Parent = buyButton
+
+		local priceLabel = Instance.new("TextLabel")
+		priceLabel.Size = UDim2.new(1, -45, 1, 0)
+		priceLabel.Position = UDim2.new(0, 45, 0, 0)
+		priceLabel.BackgroundTransparency = 1
+		priceLabel.Text = tostring(package.robux)
+		priceLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+		priceLabel.TextScaled = true
+		priceLabel.Font = Enum.Font.GothamBold
+		priceLabel.Parent = buyButton
+
+		buyButton.MouseButton1Click:Connect(function()
+			local success = robuxPurchase:InvokeServer("panzaro", package.amount)
+			if not success then
+				buyButton.BackgroundColor3 = COLORS.ERROR
+				wait(0.5)
+				buyButton.BackgroundColor3 = COLORS.ROBUX_GREEN
+			end
+		end)
+
+		yPos = yPos + 90
+	end
+
+	return yPos
+end
+
+-- Hook into MarketplaceService for purchase confirmation
+MarketplaceService.PromptProductPurchaseFinished:Connect(function(userId, productId, isPurchased)
+	if isPurchased and userId == player.UserId then
+		-- Refresh shop UI after successful purchase
+		wait(1) -- Wait for server to process
+		if _G.RefreshShopUI then
+			_G.RefreshShopUI()
+		end
+	end
+end)
+
+print("[ROBUX SHOP ADDON] Loaded successfully!")

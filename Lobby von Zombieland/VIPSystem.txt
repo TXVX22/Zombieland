@@ -1,0 +1,802 @@
+-- VIPSystem.lua MULTI-CHECK VERSION with SPAWN-ONLY LOADING SCREEN
+-- Platzierung: ServerScriptService/VIPSystem (Script)
+
+local Players = game:GetService("Players")
+local DataStoreService = game:GetService("DataStoreService")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+-- DataStore für Wins
+local winsDataStore = DataStoreService:GetOrderedDataStore("MultiplayerWins_v1")
+
+-- VIP Part und Spawns
+local vipPart = workspace:WaitForChild("VIPArea"):WaitForChild("VIP")
+local vipSpawn = workspace:FindFirstChild("VIPSpawn")
+local regularSpawn = workspace:FindFirstChild("RegularSpawn")
+
+-- Create spawns if missing
+if not vipSpawn then
+	vipSpawn = Instance.new("SpawnLocation")
+	vipSpawn.Name = "VIPSpawn"
+	vipSpawn.Size = Vector3.new(6, 1, 6)
+	vipSpawn.Position = Vector3.new(0, 10, 50)
+	vipSpawn.Material = Enum.Material.Neon
+	vipSpawn.BrickColor = BrickColor.new("Royal purple")
+	vipSpawn.Enabled = false
+	vipSpawn.Parent = workspace
+end
+
+if not regularSpawn then
+	regularSpawn = Instance.new("SpawnLocation")
+	regularSpawn.Name = "RegularSpawn"
+	regularSpawn.Size = Vector3.new(6, 1, 6)
+	regularSpawn.Position = Vector3.new(0, 10, 0)
+	regularSpawn.Material = Enum.Material.Plastic
+	regularSpawn.BrickColor = BrickColor.new("Medium stone grey")
+	regularSpawn.Enabled = true
+	regularSpawn.Neutral = true
+	regularSpawn.Parent = workspace
+else
+	regularSpawn.Enabled = true
+	regularSpawn.Neutral = true
+end
+
+-- MULTI-LAYER CACHE SYSTEM
+local top25Cache = {}  -- Main cache from DataStore
+local verifiedVIPs = {}  -- Verified VIP players
+local pendingChecks = {}  -- Players being checked
+local lastCacheUpdate = 0
+
+-- VIP PASS SYSTEM
+local vipPassOwners = {}  -- Spieler die den VIP Pass gekauft haben
+local vipTitleHidden = {}  -- Spieler die ihren VIP Titel versteckt haben
+local VIP_PASS_PRICE = 5000  -- Preis für VIP Pass in Panzaro
+
+-- NEU: Track ob Spieler vom Matchmaking zurückkommt oder im Queue ist
+local playersInMatchmaking = {}
+local playersLeavingForTeleport = {}
+
+-- Remote Events
+local remotes = ReplicatedStorage:FindFirstChild("LobbyRemotes") or Instance.new("Folder")
+remotes.Name = "LobbyRemotes"
+remotes.Parent = ReplicatedStorage
+
+local vipMessageRemote = remotes:FindFirstChild("VIPMessage") or Instance.new("RemoteEvent")
+vipMessageRemote.Name = "VIPMessage"
+vipMessageRemote.Parent = remotes
+
+-- CREATE LOADING SCREEN REMOTE IMMEDIATELY
+local loadingRemote = remotes:FindFirstChild("ShowLoadingScreen") or Instance.new("RemoteEvent")
+loadingRemote.Name = "ShowLoadingScreen"
+loadingRemote.Parent = remotes
+
+print("[VIP] Loading screen remote created")
+
+-- Setup VIP Part
+vipPart.CanCollide = false
+vipPart.Transparency = 0.5
+vipPart.Material = Enum.Material.ForceField
+
+-- FORCE UPDATE Cache from DataStore
+local function forceUpdateCache()
+	print("[VIP] Force updating cache...")
+
+	local success, result = pcall(function()
+		return winsDataStore:GetSortedAsync(false, 25)
+	end)
+
+	if success and result then
+		local pages = result:GetCurrentPage()
+		top25Cache = {}
+
+		for rank, entry in ipairs(pages) do
+			local userId = tostring(entry.key)
+			top25Cache[userId] = rank
+			print("[VIP] Top 25 #" .. rank .. ": UserID " .. userId)
+		end
+
+		lastCacheUpdate = tick()
+		print("[VIP] Cache updated with", #pages, "entries")
+		return true
+	else
+		warn("[VIP] Failed to update cache:", result)
+		return false
+	end
+end
+
+-- MULTI-CHECK VIP Status with VIP Pass support
+local function checkVIPStatus(player, forceRefresh)
+	local userId = tostring(player.UserId)
+
+	-- Speichere BEIDE Status
+	local hasVIPPass = vipPassOwners[userId] ~= nil
+	local top25Rank = nil
+
+	-- Check Top 25 Status IMMER (auch wenn VIP Pass vorhanden)
+	-- Check verified list
+	if not forceRefresh and verifiedVIPs[userId] and verifiedVIPs[userId] ~= "PASS" then
+		top25Rank = verifiedVIPs[userId]
+	end
+
+	-- Check current cache
+	if not top25Rank and top25Cache[userId] then
+		top25Rank = top25Cache[userId]
+		verifiedVIPs[userId] = top25Rank
+	end
+
+	-- Force refresh if needed
+	if not top25Rank and (forceRefresh or tick() - lastCacheUpdate > 30) then
+		if forceUpdateCache() then
+			if top25Cache[userId] then
+				top25Rank = top25Cache[userId]
+				verifiedVIPs[userId] = top25Rank
+			end
+		end
+	end
+
+	-- Direct DataStore check as last resort
+	if not top25Rank then
+		local success, directCheck = pcall(function()
+			local result = winsDataStore:GetSortedAsync(false, 25)
+			local pages = result:GetCurrentPage()
+
+			for rank, entry in ipairs(pages) do
+				if tostring(entry.key) == userId then
+					verifiedVIPs[userId] = rank
+					top25Cache[userId] = rank
+					return rank
+				end
+			end
+			return nil
+		end)
+
+		if success and directCheck then
+			top25Rank = directCheck
+		end
+	end
+
+	-- Return logic: Priorisiere Top 25 Rang über VIP Pass für die Anzeige
+	if top25Rank then
+		print("[VIP] Player", player.Name, "is Top 25 #" .. top25Rank .. (hasVIPPass and " (also has VIP Pass)" or ""))
+		return true, top25Rank
+	elseif hasVIPPass then
+		print("[VIP] Player", player.Name, "has VIP PASS only")
+		verifiedVIPs[userId] = "PASS"
+		return true, "PASS"
+	else
+		print("[VIP] Player", player.Name, "is NOT VIP")
+		return false, nil
+	end
+end
+
+-- AUTO-CORRECT System - Fixes wrong spawns/visuals (NO UNWANTED TELEPORTS!)
+local function autoCorrectVIPStatus(player)
+	if not player.Character then return end
+
+	print("[VIP] Running auto-correction for", player.Name)
+
+	-- Force refresh check
+	local isVIP, rank = checkVIPStatus(player, true)
+
+	-- Update attributes
+	player:SetAttribute("IsVIP", isVIP)
+	player:SetAttribute("VIPRank", rank)
+
+	local character = player.Character
+	local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
+
+	if isVIP then
+		-- Player SHOULD be VIP
+		verifiedVIPs[tostring(player.UserId)] = rank
+
+		-- ONLY teleport if this is the FIRST spawn and they're at wrong location
+		if humanoidRootPart and not player:GetAttribute("HasBeenCorrected") then
+			local distToRegular = (humanoidRootPart.Position - regularSpawn.Position).Magnitude
+			local distToVIP = (humanoidRootPart.Position - vipSpawn.Position).Magnitude
+
+			-- Only teleport if clearly at wrong spawn (regular spawn when should be VIP)
+			if distToRegular < 10 and distToVIP > 30 then
+				print("[VIP] CORRECTING: Moving", player.Name, "to VIP spawn (one time only)")
+				humanoidRootPart.CFrame = vipSpawn.CFrame * CFrame.new(math.random(-2,2), 3, math.random(-2,2))
+				player:SetAttribute("HasBeenCorrected", true)
+
+				-- Send VIP message only for correction
+				vipMessageRemote:FireClient(player, true, rank)
+			end
+		end
+
+		-- Check for missing visuals (always do this)
+		local head = character:FindFirstChild("Head")
+		if head and not head:FindFirstChild("VIPRank") then
+			print("[VIP] CORRECTING: Adding missing VIP visuals for", player.Name)
+			createVIPVisuals(character, rank)
+		end
+
+	else
+		-- Player should NOT be VIP
+		verifiedVIPs[tostring(player.UserId)] = nil
+
+		-- Remove any VIP visuals
+		local head = character and character:FindFirstChild("Head")
+		if head then
+			local billboard = head:FindFirstChild("VIPRank")
+			if billboard then
+				print("[VIP] CORRECTING: Removing VIP visuals from non-VIP", player.Name)
+				billboard:Destroy()
+			end
+		end
+
+		-- Remove VIP aura
+		if humanoidRootPart then
+			for _, child in ipairs(humanoidRootPart:GetChildren()) do
+				if child:IsA("Attachment") and child.Name == "VIPAura" then
+					child:Destroy()
+				end
+			end
+		end
+	end
+end
+
+-- CREATE VIP VISUALS
+function createVIPVisuals(character, rank)
+	local head = character:FindFirstChild("Head")
+	local hrp = character:FindFirstChild("HumanoidRootPart")
+
+	-- Check if player has title hidden
+	local player = Players:GetPlayerFromCharacter(character)
+	local userId = tostring(player.UserId)
+	local titleHidden = player and vipTitleHidden[userId]
+	local hasVIPPass = vipPassOwners[userId] ~= nil
+
+	if head then
+		-- Remove old billboard
+		local old = head:FindFirstChild("VIPRank")
+		if old then old:Destroy() end
+
+		-- Entscheidungslogik für Billboard
+		local shouldShowBillboard = false
+		local billboardText = ""
+		local billboardColor = Color3.fromRGB(255, 215, 0)
+
+		if rank == "PASS" then
+			-- NUR VIP Pass (kein Top 25)
+			if not titleHidden then
+				shouldShowBillboard = true
+				billboardText = "💎 VIP 💎"
+				billboardColor = Color3.fromRGB(185, 242, 255)
+			end
+			-- Wenn versteckt: Zeige nichts
+		else
+			-- Top 25 Spieler (mit oder ohne VIP Pass)
+			shouldShowBillboard = true  -- IMMER anzeigen
+
+			if titleHidden then
+				-- Titel versteckt: Nur Rang
+				billboardText = "🏆 #" .. tostring(rank) .. " 🏆"
+			else
+				-- Titel an: Zeige VIP wenn Pass vorhanden, sonst nur Top 25
+				if hasVIPPass then
+					billboardText = "💎 VIP #" .. tostring(rank) .. " 💎"
+					billboardColor = Color3.fromRGB(185, 242, 255)
+				else
+					billboardText = "🏆 #" .. tostring(rank) .. " 🏆"
+				end
+			end
+		end
+
+		-- Billboard erstellen wenn nötig
+		if shouldShowBillboard then
+			local billboard = Instance.new("BillboardGui")
+			billboard.Name = "VIPRank"
+			billboard.Size = UDim2.new(0, 100, 0, 40)
+			billboard.StudsOffset = Vector3.new(0, 3, 0)
+			billboard.AlwaysOnTop = true
+			billboard.Parent = head
+
+			local label = Instance.new("TextLabel")
+			label.Size = UDim2.new(1, 0, 1, 0)
+			label.BackgroundTransparency = 1
+			label.Text = billboardText
+			label.TextColor3 = billboardColor
+			label.TextScaled = true
+			label.Font = Enum.Font.SourceSansBold
+			label.Parent = billboard
+
+			local stroke = Instance.new("UIStroke")
+			stroke.Color = Color3.new(0,0,0)
+			stroke.Thickness = 2
+			stroke.Parent = label
+
+			print("[VIP] Created billboard for", character.Name)
+			print("  Text:", billboardText)
+			print("  Hidden setting:", titleHidden or false)
+			print("  Has VIP Pass:", hasVIPPass)
+			print("  Rank:", rank)
+		else
+			print("[VIP] No billboard for", character.Name, "- Title hidden")
+		end
+	end
+
+	if hrp then
+		-- Remove old aura
+		for _, child in ipairs(hrp:GetChildren()) do
+			if child:IsA("Attachment") and child.Name == "VIPAura" then
+				child:Destroy()
+			end
+		end
+
+		-- Create new aura nur wenn Titel nicht versteckt
+		if not titleHidden then
+			local attachment = Instance.new("Attachment")
+			attachment.Name = "VIPAura"
+			attachment.Parent = hrp
+
+			local aura = Instance.new("ParticleEmitter")
+			aura.Texture = "rbxasset://textures/particles/sparkles_main.dds"
+			aura.Rate = 10
+			aura.Lifetime = NumberRange.new(1, 2)
+			-- Farbe basierend auf Status
+			if hasVIPPass and rank ~= "PASS" then
+				aura.Color = ColorSequence.new(Color3.fromRGB(185, 242, 255)) -- Diamond blue für VIP Pass + Top 25
+			else
+				aura.Color = ColorSequence.new(Color3.fromRGB(255, 215, 0)) -- Gold für normale Top 25
+			end
+			aura.Parent = attachment
+
+			print("[VIP] Created aura for", character.Name)
+		end
+	end
+end
+
+-- VIP BARRIER with AUTO-CORRECTION
+local barriers = {}
+local welcomedPlayers = {} -- Track who already got welcome message
+
+local function setupBarrier(character, player)
+	local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
+	local humanoid = character:FindFirstChild("Humanoid")
+
+	if not humanoidRootPart or not humanoid then return end
+
+	if barriers[player] then
+		barriers[player]:Disconnect()
+	end
+
+	local lastPush = 0
+	local wrongAccessCount = 0
+
+	barriers[player] = RunService.Heartbeat:Connect(function()
+		if not character.Parent then
+			barriers[player]:Disconnect()
+			barriers[player] = nil
+			return
+		end
+
+		if humanoid.Sit then return end
+
+		local distance = (humanoidRootPart.Position - vipPart.Position).Magnitude
+		if distance < vipPart.Size.Magnitude/2 + 5 then
+			-- Check VIP status
+			local userId = tostring(player.UserId)
+			local isVIP = verifiedVIPs[userId] ~= nil
+
+			if not isVIP and tick() - lastPush > 0.1 then
+				-- Push back non-VIP
+				local push = (humanoidRootPart.Position - vipPart.Position).Unit * 30
+				humanoidRootPart.AssemblyLinearVelocity = push
+				lastPush = tick()
+
+				wrongAccessCount = wrongAccessCount + 1
+
+				-- After 3 wrong attempts, force re-check
+				if wrongAccessCount >= 3 then
+					wrongAccessCount = 0
+					print("[VIP] Player", player.Name, "tried to enter VIP area 3 times, forcing re-check...")
+					autoCorrectVIPStatus(player)
+				else
+					vipMessageRemote:FireClient(player, false, nil)
+				end
+
+			elseif isVIP then
+				wrongAccessCount = 0
+
+				-- Only send welcome ONCE per spawn
+				if not welcomedPlayers[player] then
+					welcomedPlayers[player] = true
+					local rank = verifiedVIPs[userId]
+					vipMessageRemote:FireClient(player, true, rank)
+					print("[VIP] Sent welcome message to", player.Name, "(once per spawn)")
+				end
+			end
+		end
+	end)
+end
+
+-- CREATE LOADING SCREEN - NUR WENN NICHT VOM MATCHMAKING
+local function createLoadingScreen(player)
+	-- NEU: Check ob Spieler vom Matchmaking kommt
+	if playersInMatchmaking[player] then
+		print("[VIP] Player returning from matchmaking, skipping loading screen")
+		playersInMatchmaking[player] = nil -- Reset flag
+		return
+	end
+
+	-- Use the already created remote
+	if loadingRemote then
+		-- Fire to client to show loading screen
+		loadingRemote:FireClient(player, "rbxassetid://135967191928990", 3) -- Image ID and duration
+		print("[VIP] Loading screen triggered for", player.Name)
+	else
+		warn("[VIP] Loading remote not found!")
+	end
+end
+
+-- Load VIP Pass ownership on join
+local function loadVIPPassStatus(player)
+	local vipPassDataStore = DataStoreService:GetDataStore("VIPPassOwners_AOW_v1")
+	local success, hasPass = pcall(function()
+		return vipPassDataStore:GetAsync(player.UserId)
+	end)
+
+	if success and hasPass then
+		vipPassOwners[tostring(player.UserId)] = true
+		print("[VIP] Player", player.Name, "owns VIP Pass")
+	end
+end
+
+-- Load VIP preferences
+local function loadVIPPreferences(player)
+	local vipPrefsDataStore = DataStoreService:GetDataStore("VIPPreferences_v1")
+	local success, prefs = pcall(function()
+		return vipPrefsDataStore:GetAsync(player.UserId)
+	end)
+
+	if success and prefs and prefs.titleHidden then
+		vipTitleHidden[tostring(player.UserId)] = true
+		print("[VIP] Title preference loaded - hidden for", player.Name)
+	end
+end
+
+-- NEU: Track Matchmaking Status
+local function trackMatchmakingStatus()
+	-- Listen für PlayerResponse Event um zu wissen wann jemand in Matchmaking geht
+	local playerResponseRemote = remotes:FindFirstChild("PlayerResponse")
+	if playerResponseRemote then
+		-- Dies funktioniert nicht direkt, da es ein Client->Server Event ist
+		-- Stattdessen müssen wir das LobbySystem modifizieren
+	end
+
+	-- Alternative: Check für MatchmakingStatus GUI
+	Players.PlayerAdded:Connect(function(player)
+		player.CharacterAdded:Connect(function(character)
+			-- Warte kurz
+			task.wait(0.1)
+
+			-- Check ob MatchmakingStatus GUI existiert
+			local playerGui = player:FindFirstChild("PlayerGui")
+			if playerGui and playerGui:FindFirstChild("MatchmakingStatus") then
+				playersInMatchmaking[player] = true
+				print("[VIP] Player", player.Name, "is in matchmaking queue")
+			end
+		end)
+	end)
+end
+
+-- PLAYER HANDLER with MULTI-CHECK
+Players.PlayerAdded:Connect(function(player)
+	print("[VIP] ========== PLAYER JOINED:", player.Name, "==========")
+
+	-- Load VIP Pass status
+	loadVIPPassStatus(player)
+	-- Load VIP preferences (title visibility)
+	loadVIPPreferences(player)
+
+	-- Mark as pending check
+	pendingChecks[player] = true
+
+	-- INITIAL CHECK (might fail if DataStore slow)
+	local isVIP, rank = checkVIPStatus(player, false)
+	player:SetAttribute("IsVIP", isVIP)
+	player:SetAttribute("VIPRank", rank)
+
+	-- DELAYED VERIFICATION (backup check after 2 seconds)
+	task.spawn(function()
+		task.wait(2)
+		if pendingChecks[player] then
+			print("[VIP] Running delayed verification for", player.Name)
+			autoCorrectVIPStatus(player)
+			pendingChecks[player] = nil
+		end
+	end)
+
+	-- CHARACTER HANDLER
+	player.CharacterAdded:Connect(function(character)
+		-- Reset flags for new spawn
+		player:SetAttribute("HasBeenCorrected", false)
+		welcomedPlayers[player] = nil -- Reset welcome status
+
+		-- SHOW LOADING SCREEN NUR WENN NICHT VOM MATCHMAKING
+		createLoadingScreen(player)
+
+		-- During loading screen, do all checks
+		task.spawn(function()
+			-- Multiple VIP checks during loading
+			local userId = tostring(player.UserId)
+			local isVIP = verifiedVIPs[userId] ~= nil
+			local rank = verifiedVIPs[userId]
+
+			-- First check
+			if not isVIP then
+				isVIP, rank = checkVIPStatus(player, false)
+			end
+
+			-- Wait a bit and check again if still not VIP
+			if not isVIP then
+				task.wait(1)
+				isVIP, rank = checkVIPStatus(player, true) -- Force refresh
+			end
+
+			-- Final check
+			if not isVIP then
+				task.wait(1)
+				isVIP, rank = checkVIPStatus(player, true)
+			end
+
+			-- Now spawn at correct location
+			local hrp = character:WaitForChild("HumanoidRootPart", 2)
+			if hrp then
+				if isVIP then
+					hrp.CFrame = vipSpawn.CFrame * CFrame.new(math.random(-2,2), 3, math.random(-2,2))
+					print("[VIP] VIP spawn for", player.Name, "Rank #" .. tostring(rank))
+
+					-- Create visuals while still loading
+					createVIPVisuals(character, rank)
+				else
+					hrp.CFrame = regularSpawn.CFrame * CFrame.new(math.random(-2,2), 3, math.random(-2,2))
+					print("[VIP] Regular spawn for", player.Name)
+				end
+			end
+
+			-- Setup barrier
+			setupBarrier(character, player)
+
+			-- After 3 seconds (when loading screen disappears), do final correction
+			task.wait(0.5)
+			autoCorrectVIPStatus(player)
+		end)
+	end)
+
+	player.CharacterRemoving:Connect(function()
+		if barriers[player] then
+			barriers[player]:Disconnect()
+			barriers[player] = nil
+		end
+		welcomedPlayers[player] = nil -- Reset welcome status for next spawn
+	end)
+end)
+
+Players.PlayerRemoving:Connect(function(player)
+	if barriers[player] then
+		barriers[player]:Disconnect()
+		barriers[player] = nil
+	end
+
+	local userId = tostring(player.UserId)
+	verifiedVIPs[userId] = nil
+	pendingChecks[player] = nil
+	welcomedPlayers[player] = nil -- Cleanup welcome status
+	playersInMatchmaking[player] = nil -- Cleanup matchmaking status
+end)
+
+-- INITIAL LOAD
+forceUpdateCache()
+trackMatchmakingStatus()
+
+-- AUTO-UPDATE CACHE
+task.spawn(function()
+	while true do
+		task.wait(30)
+		forceUpdateCache()
+
+		-- Only update visuals, don't teleport players!
+		for _, player in ipairs(Players:GetPlayers()) do
+			if player.Character then
+				local userId = tostring(player.UserId)
+				local wasVIP = verifiedVIPs[userId] ~= nil
+				local isVIP = top25Cache[userId] ~= nil or vipPassOwners[userId] -- Check for pass too
+
+				-- Only correct if VIP status CHANGED
+				if wasVIP ~= isVIP then
+					print("[VIP] Status changed for", player.Name, "- updating...")
+					autoCorrectVIPStatus(player)
+				else
+					-- Just update rank if still VIP and not a pass owner
+					if isVIP and not vipPassOwners[userId] then
+						verifiedVIPs[userId] = top25Cache[userId]
+						player:SetAttribute("VIPRank", top25Cache[userId])
+					end
+				end
+			end
+		end
+	end
+end)
+
+-- EMERGENCY FALLBACK
+task.spawn(function()
+	while true do
+		task.wait(1)
+
+		for _, player in ipairs(Players:GetPlayers()) do
+			local char = player.Character
+			if char then
+				local hrp = char:FindFirstChild("HumanoidRootPart")
+
+				-- Check if fallen
+				if hrp and hrp.Position.Y < -50 then
+					local userId = tostring(player.UserId)
+					local isVIP = verifiedVIPs[userId] ~= nil
+
+					if isVIP then
+						hrp.CFrame = vipSpawn.CFrame * CFrame.new(0, 3, 0)
+					else
+						hrp.CFrame = regularSpawn.CFrame * CFrame.new(0, 3, 0)
+					end
+					hrp.AssemblyLinearVelocity = Vector3.new(0,0,0)
+				end
+			end
+		end
+	end
+end)
+
+-- GLOBAL FUNCTION für Shop System
+_G.GrantVIPPass = function(player)
+	local userId = tostring(player.UserId)
+	vipPassOwners[userId] = true
+
+	-- Sofort VIP Status geben
+	verifiedVIPs[userId] = "PASS"
+	player:SetAttribute("IsVIP", true)
+	player:SetAttribute("VIPRank", "PASS")
+
+	-- Update visuals
+	if player.Character then
+		createVIPVisuals(player.Character, "PASS")
+
+		-- Teleport to VIP spawn if at regular spawn
+		local hrp = player.Character:FindFirstChild("HumanoidRootPart")
+		if hrp then
+			hrp.CFrame = vipSpawn.CFrame * CFrame.new(math.random(-2,2), 3, math.random(-2,2))
+		end
+	end
+
+	-- Save to DataStore
+	local vipPassDataStore = DataStoreService:GetDataStore("VIPPassOwners_AOW_v1")
+	pcall(function()
+		vipPassDataStore:SetAsync(player.UserId, true)
+	end)
+
+	print("[VIP] VIP Pass granted to", player.Name)
+	return true
+end
+
+-- Toggle VIP Title visibility
+_G.ToggleVIPTitle = function(player, showTitle)
+	local userId = tostring(player.UserId)
+
+	-- Hole den aktuellen Status des Spielers
+	local isVIP, rank = checkVIPStatus(player, false)
+
+	if showTitle then
+		vipTitleHidden[userId] = nil
+		print("[VIP] Title enabled for", player.Name)
+
+		-- Recreate visuals mit aktuellem Rang
+		if isVIP and player.Character then
+			createVIPVisuals(player.Character, rank)
+		end
+	else
+		vipTitleHidden[userId] = true
+		print("[VIP] Title hidden for", player.Name)
+
+		-- Entferne alte Visuals
+		if player.Character then
+			local head = player.Character:FindFirstChild("Head")
+			if head then
+				local billboard = head:FindFirstChild("VIPRank")
+				if billboard then
+					billboard:Destroy()
+				end
+			end
+
+			local hrp = player.Character:FindFirstChild("HumanoidRootPart")
+			if hrp then
+				for _, child in ipairs(hrp:GetChildren()) do
+					if child:IsA("Attachment") and child.Name == "VIPAura" then
+						child:Destroy()
+					end
+				end
+			end
+
+			-- WICHTIG: Wenn Top 25, zeige trotzdem den Rang!
+			if rank and rank ~= "PASS" then
+				-- Spieler ist Top 25, zeige den Rang ohne VIP
+				createVIPVisuals(player.Character, rank)
+				print("[VIP] Recreated visuals for Top 25 player without VIP title")
+			end
+		end
+	end
+
+	-- Save preference
+	local vipPrefsDataStore = DataStoreService:GetDataStore("VIPPreferences_v1")
+	pcall(function()
+		vipPrefsDataStore:SetAsync(player.UserId, {titleHidden = not showTitle})
+	end)
+
+	return true
+end
+
+-- NEU: Global function für LobbySystem
+_G.SetPlayerInMatchmaking = function(player, inMatchmaking)
+	if inMatchmaking then
+		playersInMatchmaking[player] = true
+		print("[VIP] Player", player.Name, "marked as in matchmaking")
+	else
+		playersInMatchmaking[player] = nil
+		print("[VIP] Player", player.Name, "removed from matchmaking tracking")
+	end
+end
+
+-- DEBUG COMMANDS
+Players.PlayerAdded:Connect(function(player)
+	player.Chatted:Connect(function(msg)
+		if msg:lower() == "/vipcheck" then
+			local userId = tostring(player.UserId)
+			print("[VIP] ===== STATUS CHECK =====")
+			print("  Player:", player.Name)
+			print("  UserID:", userId)
+			print("  Has VIP Pass:", vipPassOwners[userId] or "NO")
+			print("  In Top25 Cache:", top25Cache[userId] or "NO")
+			print("  In Verified VIPs:", verifiedVIPs[userId] or "NO")
+			print("  In Matchmaking:", playersInMatchmaking[player] or "NO")
+			print("  Attribute IsVIP:", player:GetAttribute("IsVIP"))
+			print("  Attribute Rank:", player:GetAttribute("VIPRank"))
+
+		elseif msg:lower() == "/forcevip" then
+			-- Force VIP for testing
+			local userId = tostring(player.UserId)
+			verifiedVIPs[userId] = 1
+			top25Cache[userId] = 1
+			player:SetAttribute("IsVIP", true)
+			player:SetAttribute("VIPRank", 1)
+
+			if player.Character then
+				createVIPVisuals(player.Character, 1)
+				local hrp = player.Character:FindFirstChild("HumanoidRootPart")
+				if hrp then
+					hrp.CFrame = vipSpawn.CFrame * CFrame.new(0, 3, 0)
+				end
+			end
+			print("[VIP] Forced VIP status for testing")
+
+		elseif msg:lower() == "/recheck" then
+			-- Force recheck VIP status
+			autoCorrectVIPStatus(player)
+			print("[VIP] Forced recheck for", player.Name)
+
+		elseif msg:lower() == "/refreshcache" then
+			-- Force cache refresh
+			forceUpdateCache()
+			print("[VIP] Forced cache refresh")
+
+		elseif msg:lower() == "/setmatchmaking" then
+			-- Test matchmaking flag
+			playersInMatchmaking[player] = true
+			print("[VIP] Set matchmaking flag for testing")
+		end
+	end)
+end)
+
+print("[VIP SYSTEM] FIXED VERSION WITH SPAWN-ONLY LOADING SCREEN")
+print("[VIP SYSTEM] Features: Auto-Correction, Multi-Layer Cache, Matchmaking Detection")
+print("[VIP SYSTEM] Commands: /vipcheck, /forcevip, /recheck, /refreshcache, /setmatchmaking")

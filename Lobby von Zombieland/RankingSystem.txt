@@ -1,0 +1,354 @@
+-- RankingSystem.lua (FIXED - Nur Front Face)
+-- Platzierung: ServerScriptService/RankingSystem (Script)
+
+local Players = game:GetService("Players")
+local DataStoreService = game:GetService("DataStoreService")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+
+-- DataStore für Wins
+local winsDataStore = DataStoreService:GetOrderedDataStore("MultiplayerWins_v1")
+
+-- Cache für Leaderboard
+local leaderboardCache = {}
+local lastUpdate = 0
+local UPDATE_INTERVAL = 30 -- Update alle 30 Sekunden
+
+-- Das MeshPart für die Rangliste
+local rankingPart = workspace:WaitForChild("Alles"):WaitForChild("Rangliste")
+
+-- Farben für verschiedene Ränge
+local RANK_COLORS = {
+	[1] = Color3.fromRGB(255, 215, 0),  -- Gold
+	[2] = Color3.fromRGB(192, 192, 192), -- Silber
+	[3] = Color3.fromRGB(205, 127, 50),  -- Bronze
+	-- Rest
+	Color3.fromRGB(100, 150, 255), -- Blau
+	Color3.fromRGB(150, 255, 100), -- Grün
+	Color3.fromRGB(255, 150, 100), -- Orange
+}
+
+-- Erstelle SurfaceGui (NUR EINE SEITE!)
+local function createRankingDisplay()
+	-- Zuerst alle alten GUIs entfernen
+	for _, child in ipairs(rankingPart:GetChildren()) do
+		if child:IsA("SurfaceGui") then
+			child:Destroy()
+		end
+	end
+
+	-- WICHTIG: Nur EINE SurfaceGui auf der Front Face erstellen!
+	local surfaceGui = Instance.new("SurfaceGui")
+	surfaceGui.Name = "RankingDisplay"
+	surfaceGui.Face = Enum.NormalId.Front -- NUR Front Face!
+	surfaceGui.SizingMode = Enum.SurfaceGuiSizingMode.PixelsPerStud
+	surfaceGui.PixelsPerStud = 35
+	surfaceGui.LightInfluence = 0
+	surfaceGui.Brightness = 2
+	surfaceGui.AlwaysOnTop = false
+	surfaceGui.Parent = rankingPart
+
+	-- Hintergrund mit Gradient
+	local background = Instance.new("Frame")
+	background.Size = UDim2.new(1, 0, 1, 0)
+	background.BackgroundColor3 = Color3.fromRGB(10, 10, 30)
+	background.BorderSizePixel = 0
+	background.Parent = surfaceGui
+
+	local gradient = Instance.new("UIGradient")
+	gradient.Color = ColorSequence.new{
+		ColorSequenceKeypoint.new(0, Color3.fromRGB(20, 20, 60)),
+		ColorSequenceKeypoint.new(0.5, Color3.fromRGB(10, 10, 30)),
+		ColorSequenceKeypoint.new(1, Color3.fromRGB(20, 20, 60))
+	}
+	gradient.Rotation = 90
+	gradient.Parent = background
+
+	-- Title
+	local title = Instance.new("TextLabel")
+	title.Size = UDim2.new(0.9, 0, 0.15, 0)
+	title.Position = UDim2.new(0.05, 0, 0.02, 0)
+	title.BackgroundTransparency = 1
+	title.Text = "⚔️ TOP 25 WARRIORS ⚔️"
+	title.TextColor3 = Color3.fromRGB(255, 215, 0)
+	title.TextScaled = true
+	title.Font = Enum.Font.SourceSansBold
+	title.Parent = surfaceGui
+
+	-- Create glow effect for title
+	local titleStroke = Instance.new("UIStroke")
+	titleStroke.Color = Color3.fromRGB(255, 215, 0)
+	titleStroke.Thickness = 2
+	titleStroke.Transparency = 0.5
+	titleStroke.Parent = title
+
+	-- Scroll Frame für Einträge
+	local scrollingFrame = Instance.new("ScrollingFrame")
+	scrollingFrame.Size = UDim2.new(0.95, 0, 0.8, 0)
+	scrollingFrame.Position = UDim2.new(0.025, 0, 0.17, 0)
+	scrollingFrame.BackgroundTransparency = 1
+	scrollingFrame.BorderSizePixel = 0
+	scrollingFrame.ScrollBarThickness = 8
+	scrollingFrame.ScrollBarImageColor3 = Color3.fromRGB(255, 215, 0)
+	scrollingFrame.ScrollBarImageTransparency = 0.5
+	scrollingFrame.CanvasSize = UDim2.new(0, 0, 2, 0)
+	scrollingFrame.Parent = surfaceGui
+
+	-- UI List Layout für automatische Anordnung
+	local listLayout = Instance.new("UIListLayout")
+	listLayout.SortOrder = Enum.SortOrder.LayoutOrder
+	listLayout.Padding = UDim.new(0, 8)
+	listLayout.Parent = scrollingFrame
+
+	print("[RANKING] Created display on Front face only")
+	return scrollingFrame -- Gib nur EIN ScrollingFrame zurück
+end
+
+-- Erstelle einen Leaderboard Eintrag
+local function createRankEntry(rank, username, wins, parent)
+	local entryFrame = Instance.new("Frame")
+	entryFrame.Size = UDim2.new(0.98, 0, 0, 60)
+	entryFrame.BackgroundColor3 = Color3.fromRGB(30, 35, 50)
+	entryFrame.BorderSizePixel = 0
+	entryFrame.LayoutOrder = rank
+	entryFrame.Parent = parent
+
+	-- Special effects for top 3
+	if rank <= 3 then
+		entryFrame.BackgroundColor3 = Color3.fromRGB(40, 45, 65)
+
+		-- Add gradient for top 3
+		local specialGradient = Instance.new("UIGradient")
+		specialGradient.Color = ColorSequence.new{
+			ColorSequenceKeypoint.new(0, Color3.fromRGB(40, 40, 80)),
+			ColorSequenceKeypoint.new(0.5, Color3.fromRGB(60, 60, 120)),
+			ColorSequenceKeypoint.new(1, Color3.fromRGB(40, 40, 80))
+		}
+		specialGradient.Rotation = 0
+		specialGradient.Parent = entryFrame
+
+		local glowStroke = Instance.new("UIStroke")
+		glowStroke.Color = RANK_COLORS[rank]
+		glowStroke.Thickness = 2
+		glowStroke.Transparency = 0.5
+		glowStroke.Parent = entryFrame
+	end
+
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 8)
+	corner.Parent = entryFrame
+
+	-- Rank Medal/Number
+	local rankLabel = Instance.new("TextLabel")
+	rankLabel.Size = UDim2.new(0.15, 0, 0.8, 0)
+	rankLabel.Position = UDim2.new(0, 0, 0.1, 0)
+	rankLabel.BackgroundTransparency = 1
+
+	if rank == 1 then
+		rankLabel.Text = "🥇"
+		rankLabel.TextColor3 = RANK_COLORS[1]
+	elseif rank == 2 then
+		rankLabel.Text = "🥈"
+		rankLabel.TextColor3 = RANK_COLORS[2]
+	elseif rank == 3 then
+		rankLabel.Text = "🥉"
+		rankLabel.TextColor3 = RANK_COLORS[3]
+	else
+		rankLabel.Text = "#" .. rank
+		rankLabel.TextColor3 = RANK_COLORS[math.min(rank + 3, #RANK_COLORS)]
+	end
+
+	rankLabel.TextScaled = true
+	rankLabel.Font = Enum.Font.SourceSansBold
+	rankLabel.Parent = entryFrame
+
+	-- Username
+	local nameLabel = Instance.new("TextLabel")
+	nameLabel.Size = UDim2.new(0.55, 0, 0.8, 0)
+	nameLabel.Position = UDim2.new(0.15, 0, 0.1, 0)
+	nameLabel.BackgroundTransparency = 1
+	nameLabel.Text = username
+	nameLabel.TextColor3 = rank <= 3 and RANK_COLORS[rank] or Color3.fromRGB(200, 200, 200)
+	nameLabel.TextSize = 46
+	nameLabel.Font = rank <= 3 and Enum.Font.SourceSansBold or Enum.Font.SourceSans
+	nameLabel.TextXAlignment = Enum.TextXAlignment.Left
+	nameLabel.TextTruncate = Enum.TextTruncate.AtEnd
+	nameLabel.Parent = entryFrame
+
+	-- Wins Count
+	local winsLabel = Instance.new("TextLabel")
+	winsLabel.Size = UDim2.new(0.3, 0, 0.8, 0)
+	winsLabel.Position = UDim2.new(0.7, 0, 0.1, 0)
+	winsLabel.BackgroundTransparency = 1
+	winsLabel.Text = "⚔️ " .. wins
+	winsLabel.TextColor3 = Color3.fromRGB(255, 200, 100)
+	winsLabel.TextSize = 46
+	winsLabel.Font = Enum.Font.SourceSansBold
+	winsLabel.TextXAlignment = Enum.TextXAlignment.Right
+	winsLabel.Parent = entryFrame
+
+	-- Entrance Animation
+	entryFrame.BackgroundTransparency = 1
+	TweenService:Create(entryFrame, TweenInfo.new(0.3, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+		BackgroundTransparency = 0
+	}):Play()
+
+	return entryFrame
+end
+
+-- Update Leaderboard (NUR für EIN ScrollingFrame!)
+local function updateLeaderboard(scrollingFrame)
+	-- Sicherheitscheck
+	if not scrollingFrame or not scrollingFrame.Parent then
+		print("[RANKING] ScrollingFrame not found, recreating...")
+		scrollingFrame = createRankingDisplay()
+	end
+
+	-- Clear old entries
+	for _, child in ipairs(scrollingFrame:GetChildren()) do
+		if child:IsA("Frame") then
+			child:Destroy()
+		end
+	end
+
+	-- Get top 25 players
+	local success, result = pcall(function()
+		return winsDataStore:GetSortedAsync(false, 25)
+	end)
+
+	if not success then
+		warn("[RANKING] Failed to fetch leaderboard:", result)
+		return
+	end
+
+	local pages = result:GetCurrentPage()
+
+	-- Create entries
+	local rank = 1
+	for _, entry in ipairs(pages) do
+		local userId = entry.key
+		local wins = entry.value
+
+		-- Get username
+		local username = "Unknown"
+		local success, name = pcall(function()
+			return Players:GetNameFromUserIdAsync(userId)
+		end)
+		if success then
+			username = name
+		end
+
+		-- Create entry
+		createRankEntry(rank, username, wins, scrollingFrame)
+		rank = rank + 1
+	end
+
+	-- Update canvas size
+	scrollingFrame.CanvasSize = UDim2.new(0, 0, 0, rank * 65)
+
+	-- Cache update
+	lastUpdate = tick()
+	print("[RANKING] Updated leaderboard with", #pages, "entries")
+end
+
+-- Initialize Display
+local mainScrollingFrame = createRankingDisplay()
+
+-- Auto-update loop mit Debounce
+local isUpdating = false
+spawn(function()
+	while true do
+		if not isUpdating then
+			isUpdating = true
+			updateLeaderboard(mainScrollingFrame)
+			isUpdating = false
+		end
+		wait(UPDATE_INTERVAL)
+	end
+end)
+
+-- ===== WICHTIG: NEUE INTEGRATION MIT WINSMASTER =====
+
+-- Global function für WinsMaster
+_G.ForceUpdateLeaderboard = function()
+	if not isUpdating then
+		print("[RANKING] Force update requested by WinsMaster")
+		isUpdating = true
+		updateLeaderboard(mainScrollingFrame)
+		isUpdating = false
+	else
+		print("[RANKING] Update already in progress, skipping...")
+	end
+end
+
+-- Warte bis WinsMaster bereit ist
+task.wait(2)
+
+-- Update Leaderboard wenn Wins sich ändern
+Players.PlayerAdded:Connect(function(player)
+	-- Warte bis Leaderstats existieren (von WinsMaster erstellt)
+	local leaderstats = player:WaitForChild("leaderstats", 10)
+	if leaderstats then
+		local wins = leaderstats:WaitForChild("Wins", 10)
+		if wins then
+			-- Update Leaderboard wenn sich Wins ändern
+			wins.Changed:Connect(function(newValue)
+				print("[RANKING] Wins changed for", player.Name, "to", newValue)
+
+				-- Warte kurz damit DataStore save fertig ist
+				task.wait(2)
+
+				-- Force update wenn genug Zeit vergangen ist
+				if tick() - lastUpdate > 3 and not isUpdating then
+					isUpdating = true
+					updateLeaderboard(mainScrollingFrame)
+					isUpdating = false
+					print("[RANKING] Updated leaderboard after win change")
+				end
+			end)
+		end
+	end
+end)
+
+-- ===== DEBUG COMMANDS (UPDATED) =====
+
+Players.PlayerAdded:Connect(function(player)
+	player.Chatted:Connect(function(msg)
+		if msg:lower() == "/testwins" then
+			-- Nutze WinsMaster function statt direkt zu ändern
+			if _G.AddPlayerWins then
+				_G.AddPlayerWins(player, 1)
+				print("[RANKING] Added 1 win via WinsMaster")
+			else
+				warn("[RANKING] WinsMaster not available!")
+			end
+
+		elseif msg:lower() == "/refreshranking" then
+			if not isUpdating then
+				isUpdating = true
+				updateLeaderboard(mainScrollingFrame)
+				isUpdating = false
+				print("[RANKING] Manually refreshed leaderboard")
+			end
+
+		elseif msg:lower() == "/debugranking" then
+			print("[RANKING DEBUG]")
+			print("  ScrollingFrame exists:", mainScrollingFrame and mainScrollingFrame.Parent and "Yes" or "No")
+			print("  Is updating:", isUpdating)
+			print("  Last update:", tick() - lastUpdate, "seconds ago")
+
+			local count = 0
+			if mainScrollingFrame and mainScrollingFrame.Parent then
+				for _, child in ipairs(mainScrollingFrame:GetChildren()) do
+					if child:IsA("Frame") then
+						count = count + 1
+					end
+				end
+			end
+			print("  Current entries:", count)
+		end
+	end)
+end)
+
+print("[RANKING SYSTEM] Initialized with single-face display!")
+print("[RANKING SYSTEM] Commands: /testwins, /refreshranking, /debugranking")

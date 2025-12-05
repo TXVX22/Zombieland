@@ -1,0 +1,697 @@
+-- MainGameServer.lua
+-- Platzierung: ServerScriptService/MainGameServer (Script)
+
+print("[MainGameServer] Starting initialization...")
+
+-- Services
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerScriptService = game:GetService("ServerScriptService")
+local RunService = game:GetService("RunService")
+
+-- ═══════════════════════════════════════════════════════════════
+-- REMOTE EVENTS SETUP
+-- ═══════════════════════════════════════════════════════════════
+
+print("[MainGameServer] Setting up RemoteEvents...")
+
+local Remotes = Instance.new("Folder")
+Remotes.Name = "Remotes"
+Remotes.Parent = ReplicatedStorage
+
+-- Liste aller benötigten RemoteEvents
+local remoteEventNames = {
+	-- Player Events
+	"PlayerData",
+	"LevelUp",
+	"ExpGained",
+	"PlayerDied",
+	"PlayerRespawn",
+
+	-- Zombie Events
+	"WaveUpdate",
+	"ZombieSpawned",
+	"ZombieDied",
+	"ZombieAttack",
+	"ProjectileFired",
+
+	-- Weapon Events
+	"WeaponFire",
+	"WeaponReload",
+	"WeaponEquip",
+	"WeaponHit",
+
+	-- Fence Events
+	"FenceBuildStart",
+	"FenceBuildProgress",
+	"FenceBuildComplete",
+	"FenceDestroyed",
+	"FenceDamaged",
+
+	-- Game Events
+	"GameStart",
+	"GameEnd",
+	"GameState",
+
+	-- Admin/Debug Events
+	"AdminCommand"
+}
+
+-- Erstelle alle RemoteEvents
+for _, name in pairs(remoteEventNames) do
+	local remote = Instance.new("RemoteEvent")
+	remote.Name = name
+	remote.Parent = Remotes
+end
+
+print("[MainGameServer] Created " .. #remoteEventNames .. " RemoteEvents")
+
+-- ═══════════════════════════════════════════════════════════════
+-- MODULE SETUP
+-- ═══════════════════════════════════════════════════════════════
+
+print("[MainGameServer] Setting up Modules folder...")
+
+-- Erstelle Modules Ordner in ReplicatedStorage falls nicht vorhanden
+local modulesFolder = ReplicatedStorage:FindFirstChild("Modules")
+if not modulesFolder then
+	modulesFolder = Instance.new("Folder")
+	modulesFolder.Name = "Modules"
+	modulesFolder.Parent = ReplicatedStorage
+end
+
+-- Warte auf Module (werden manuell hinzugefügt)
+print("[MainGameServer] Waiting for GameConfig module...")
+local GameConfig = nil
+local configModule = modulesFolder:WaitForChild("GameConfig", 10)
+if configModule then
+	GameConfig = require(configModule)
+	print("[MainGameServer] GameConfig loaded!")
+else
+	warn("[MainGameServer] GameConfig not found! Creating default...")
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- SERVER MODULES
+-- ═══════════════════════════════════════════════════════════════
+
+print("[MainGameServer] Loading server modules...")
+
+-- Erstelle Modules Ordner in ServerScriptService falls nicht vorhanden
+local serverModulesFolder = ServerScriptService:FindFirstChild("Modules")
+if not serverModulesFolder then
+	serverModulesFolder = Instance.new("Folder")
+	serverModulesFolder.Name = "Modules"
+	serverModulesFolder.Parent = ServerScriptService
+end
+
+-- Module Referenzen (werden nach Initialisierung gefüllt)
+local ZombieManager = nil
+local ZombieAI = nil
+local PlayerManager = nil
+local WeaponManager = nil
+local FenceManager = nil
+
+-- Forward Declarations (damit Funktionen vor Definition aufgerufen werden koennen)
+local InitializeGame
+local SetupGameEvents
+local CheckAutoStart
+local StartGame
+local StopGame
+local RestartGame
+local SyncGameState
+
+-- Module Loading Function (wird am Ende des Scripts aufgerufen)
+local function LoadModules()
+	-- Warte auf Module
+	local zombieManagerModule = serverModulesFolder:WaitForChild("ZombieManager", 10)
+	local zombieAIModule = serverModulesFolder:WaitForChild("ZombieAI", 10)
+	local playerManagerModule = serverModulesFolder:WaitForChild("PlayerManager", 10)
+	local weaponManagerModule = serverModulesFolder:WaitForChild("WeaponManager", 10)
+	local fenceManagerModule = serverModulesFolder:WaitForChild("FenceManager", 10)
+
+	if zombieManagerModule then
+		ZombieManager = require(zombieManagerModule)
+		print("[MainGameServer] ZombieManager loaded!")
+	else
+		warn("[MainGameServer] ZombieManager not found!")
+	end
+
+	if zombieAIModule then
+		ZombieAI = require(zombieAIModule)
+		print("[MainGameServer] ZombieAI loaded!")
+	else
+		warn("[MainGameServer] ZombieAI not found!")
+	end
+
+	if playerManagerModule then
+		PlayerManager = require(playerManagerModule)
+		print("[MainGameServer] PlayerManager loaded!")
+	else
+		warn("[MainGameServer] PlayerManager not found!")
+	end
+
+	if weaponManagerModule then
+		WeaponManager = require(weaponManagerModule)
+		print("[MainGameServer] WeaponManager loaded!")
+	else
+		warn("[MainGameServer] WeaponManager not found!")
+	end
+
+	if fenceManagerModule then
+		FenceManager = require(fenceManagerModule)
+		print("[MainGameServer] FenceManager loaded!")
+	else
+		warn("[MainGameServer] FenceManager not found!")
+	end
+
+	-- Initialisiere Module
+	InitializeGame()
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- GAME STATE
+-- ═══════════════════════════════════════════════════════════════
+
+local GameState = {
+	IsRunning = false,
+	CurrentWave = 0,
+	TotalKills = 0,
+	GameStartTime = 0,
+	MinPlayersToStart = 1
+}
+
+-- ═══════════════════════════════════════════════════════════════
+-- GAME INITIALIZATION
+-- ═══════════════════════════════════════════════════════════════
+
+InitializeGame = function()
+	print("[MainGameServer] Initializing game systems...")
+
+	-- Initialisiere alle Manager
+	if FenceManager then
+		FenceManager.Initialize()
+	end
+
+	if PlayerManager then
+		PlayerManager.Initialize()
+	end
+
+	if ZombieManager then
+		ZombieManager.Initialize()
+	end
+
+	if ZombieAI then
+		ZombieAI.Initialize(FenceManager)
+	end
+
+	if WeaponManager then
+		WeaponManager.Initialize(ZombieManager, PlayerManager)
+	end
+
+	-- Verbinde Zombie-Spawn mit AI
+	if ZombieManager and ZombieAI then
+		local zombieSpawnedRemote = Remotes:FindFirstChild("ZombieSpawned")
+		if zombieSpawnedRemote then
+			-- Überwache Zombie-Ordner für neue Zombies
+			local zombieFolder = ZombieManager.GetZombieFolder()
+			if zombieFolder then
+				zombieFolder.ChildAdded:Connect(function(zombie)
+					if zombie:IsA("Model") then
+						task.wait(0.1) -- Kurze Verzögerung für vollständige Initialisierung
+						ZombieAI.StartAI(zombie)
+					end
+				end)
+			end
+		end
+	end
+
+	-- Setup Game Events
+	SetupGameEvents()
+
+	print("[MainGameServer] Game systems initialized!")
+
+	-- Auto-Start wenn genug Spieler
+	CheckAutoStart()
+end
+
+SetupGameEvents = function()
+	-- Game Start Remote
+	local gameStartRemote = Remotes:FindFirstChild("GameStart")
+	if gameStartRemote then
+		gameStartRemote.OnServerEvent:Connect(function(player)
+			-- Nur für Admins oder automatischer Start
+			StartGame()
+		end)
+	end
+
+	-- Player Join Handler
+	Players.PlayerAdded:Connect(function(player)
+		print("[MainGameServer] Player joined: " .. player.Name)
+		CheckAutoStart()
+
+		-- Sync Game State
+		task.wait(2)
+		SyncGameState(player)
+	end)
+
+	-- Player Leave Handler
+	Players.PlayerRemoving:Connect(function(player)
+		print("[MainGameServer] Player left: " .. player.Name)
+
+		-- Prüfe ob Spiel beendet werden soll
+		if #Players:GetPlayers() <= 1 and GameState.IsRunning then
+			-- Optinal: Pause oder beende Spiel
+		end
+	end)
+end
+
+CheckAutoStart = function()
+	local playerCount = #Players:GetPlayers()
+
+	if playerCount >= GameState.MinPlayersToStart and not GameState.IsRunning then
+		print("[MainGameServer] Enough players, starting game in 5 seconds...")
+
+		task.delay(5, function()
+			if #Players:GetPlayers() >= GameState.MinPlayersToStart and not GameState.IsRunning then
+				StartGame()
+			end
+		end)
+	end
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- GAME CONTROL
+-- ═══════════════════════════════════════════════════════════════
+
+StartGame = function()
+	if GameState.IsRunning then
+		warn("[MainGameServer] Game already running!")
+		return
+	end
+
+	print("[MainGameServer] Starting game...")
+
+	GameState.IsRunning = true
+	GameState.GameStartTime = tick()
+	GameState.CurrentWave = 0
+	GameState.TotalKills = 0
+
+	-- Informiere alle Clients
+	local gameStateRemote = Remotes:FindFirstChild("GameState")
+	if gameStateRemote then
+		gameStateRemote:FireAllClients("GameStarted")
+	end
+
+	-- Starte Zombie-Wellen
+	if ZombieManager then
+		ZombieManager.StartGame()
+	end
+
+	print("[MainGameServer] Game started!")
+end
+
+StopGame = function(reason)
+	if not GameState.IsRunning then return end
+
+	print("[MainGameServer] Stopping game. Reason: " .. (reason or "Unknown"))
+
+	GameState.IsRunning = false
+
+	-- Stoppe Zombie-Spawning
+	if ZombieManager then
+		ZombieManager.StopGame()
+	end
+
+	-- Stoppe AI
+	if ZombieAI then
+		ZombieAI.StopAllAI()
+	end
+
+	-- Reset Zäune
+	if FenceManager then
+		FenceManager.ResetAllFences()
+	end
+
+	-- Informiere Clients
+	local gameStateRemote = Remotes:FindFirstChild("GameState")
+	if gameStateRemote then
+		gameStateRemote:FireAllClients("GameEnded", reason, GameState.TotalKills, GameState.CurrentWave)
+	end
+end
+
+RestartGame = function()
+	StopGame("Restart")
+
+	task.wait(5)
+
+	StartGame()
+end
+
+SyncGameState = function(player)
+	local gameStateRemote = Remotes:FindFirstChild("GameState")
+	if gameStateRemote then
+		gameStateRemote:FireClient(player, "Sync", {
+			IsRunning = GameState.IsRunning,
+			CurrentWave = GameState.CurrentWave,
+			TotalKills = GameState.TotalKills
+		})
+	end
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- WAVE TRACKING
+-- ═══════════════════════════════════════════════════════════════
+
+-- Überwache Wellen-Updates
+task.spawn(function()
+	while true do
+		task.wait(1)
+
+		if ZombieManager and GameState.IsRunning then
+			local currentWave = ZombieManager.GetCurrentWave()
+			if currentWave ~= GameState.CurrentWave then
+				GameState.CurrentWave = currentWave
+				print("[MainGameServer] Wave updated to: " .. currentWave)
+			end
+		end
+	end
+end)
+
+-- ═══════════════════════════════════════════════════════════════
+-- KILL TRACKING
+-- ═══════════════════════════════════════════════════════════════
+
+local zombieDiedRemote = Remotes:WaitForChild("ZombieDied")
+zombieDiedRemote.OnServerEvent:Connect(function(player)
+	-- Client sollte keine Server Events senden für Deaths
+	-- Dies ist nur für Tracking
+end)
+
+-- Überwache Zombie-Deaths
+task.spawn(function()
+	task.wait(5) -- Warte auf Initialisierung
+
+	if ZombieManager then
+		local zombieFolder = ZombieManager.GetZombieFolder()
+		if zombieFolder then
+			zombieFolder.ChildRemoved:Connect(function(zombie)
+				if zombie:GetAttribute("ZombieType") then
+					GameState.TotalKills = GameState.TotalKills + 1
+				end
+			end)
+		end
+	end
+end)
+
+-- ═══════════════════════════════════════════════════════════════
+-- GAME OVER CHECK
+-- ═══════════════════════════════════════════════════════════════
+
+task.spawn(function()
+	while true do
+		task.wait(2)
+
+		if GameState.IsRunning and PlayerManager then
+			local alivePlayers = PlayerManager.GetAlivePlayers()
+
+			if #alivePlayers == 0 and #Players:GetPlayers() > 0 then
+				-- Alle Spieler tot - Game Over
+				print("[MainGameServer] All players dead! Game Over!")
+				StopGame("AllPlayersDead")
+
+				-- Warte und restart
+				task.wait(10)
+				RestartGame()
+			end
+		end
+	end
+end)
+
+-- ═══════════════════════════════════════════════════════════════
+-- ADMIN COMMANDS (Chat + RemoteEvent)
+-- ═══════════════════════════════════════════════════════════════
+
+-- Pruefe ob Spieler Admin ist (Studio oder Creator)
+local function IsAdmin(player)
+	return player.UserId == game.CreatorId or RunService:IsStudio()
+end
+
+-- GodMode Tracking
+local GodModePlayers = {}
+
+-- Admin Command Handler
+local function HandleAdminCommand(player, command, ...)
+	if not IsAdmin(player) then
+		warn("[AdminCommand] Unauthorized: " .. player.Name)
+		return
+	end
+
+	local args = {...}
+	print("[AdminCommand] " .. player.Name .. " executed: " .. command, ...)
+
+	-- ═══════════════════════════════════════════════════════════════
+	-- MORPH COMMANDS
+	-- ═══════════════════════════════════════════════════════════════
+	if command == "Morph" then
+		local skinName = args[1]
+		if skinName and PlayerManager then
+			print("[AdminCommand] Morphing " .. player.Name .. " to " .. skinName)
+			PlayerManager.MorphCharacter(player, skinName)
+		end
+
+	-- ═══════════════════════════════════════════════════════════════
+	-- EXP & LEVEL COMMANDS
+	-- ═══════════════════════════════════════════════════════════════
+	elseif command == "AddExp" then
+		local amount = tonumber(args[1]) or 100
+		if PlayerManager then
+			local data = PlayerManager.GetPlayerData(player)
+			if data then
+				PlayerManager.AddExp(player, amount)
+				print("[AdminCommand] Added " .. amount .. " EXP to " .. player.Name)
+			end
+		end
+
+	elseif command == "SetLevel" then
+		local targetLevel = tonumber(args[1]) or 1
+		if PlayerManager then
+			local data = PlayerManager.GetPlayerData(player)
+			if data then
+				-- Reset auf Level 1
+				data.Level = 1
+				data.CurrentExp = 0
+				data.TotalExp = 0
+
+				-- Level Up bis zum Ziel-Level
+				for i = 2, targetLevel do
+					PlayerManager.LevelUp(player)
+				end
+				print("[AdminCommand] Set " .. player.Name .. " to Level " .. targetLevel)
+			end
+		end
+
+	-- ═══════════════════════════════════════════════════════════════
+	-- WEAPON COMMANDS
+	-- ═══════════════════════════════════════════════════════════════
+	elseif command == "EquipWeapon" then
+		local weaponId = tonumber(args[1]) or 1
+		if WeaponManager and PlayerManager then
+			-- Temporaer Level erhoehen um Waffe freizuschalten
+			local data = PlayerManager.GetPlayerData(player)
+			local originalLevel = data and data.Level or 1
+
+			-- Setze temporaer hohes Level
+			if data then data.Level = 10 end
+
+			-- Waffe ausruesten
+			WeaponManager.EquipWeapon(player, weaponId)
+			print("[AdminCommand] Equipped weapon " .. weaponId .. " for " .. player.Name)
+
+			-- Level zuruecksetzen (optional - wir lassen es fuer Testing)
+			-- if data then data.Level = originalLevel end
+		end
+
+	-- ═══════════════════════════════════════════════════════════════
+	-- GAME CONTROL COMMANDS
+	-- ═══════════════════════════════════════════════════════════════
+	elseif command == "StartGame" then
+		StartGame()
+
+	elseif command == "StopGame" then
+		StopGame("AdminStop")
+
+	elseif command == "SkipWave" then
+		if ZombieManager then
+			-- Toete alle Zombies
+			for _, zombie in pairs(ZombieManager.GetAllZombies()) do
+				local humanoid = zombie:FindFirstChildOfClass("Humanoid")
+				if humanoid then
+					humanoid.Health = 0
+				end
+			end
+			print("[AdminCommand] Skipped wave - killed all zombies")
+		end
+
+	elseif command == "KillAllZombies" then
+		if ZombieManager then
+			local count = 0
+			for _, zombie in pairs(ZombieManager.GetAllZombies()) do
+				local humanoid = zombie:FindFirstChildOfClass("Humanoid")
+				if humanoid then
+					humanoid.Health = 0
+					count = count + 1
+				end
+			end
+			print("[AdminCommand] Killed " .. count .. " zombies")
+		end
+
+	-- ═══════════════════════════════════════════════════════════════
+	-- PLAYER COMMANDS
+	-- ═══════════════════════════════════════════════════════════════
+	elseif command == "Heal" then
+		local character = player.Character
+		if character then
+			local humanoid = character:FindFirstChildOfClass("Humanoid")
+			if humanoid then
+				humanoid.Health = humanoid.MaxHealth
+				print("[AdminCommand] Healed " .. player.Name)
+			end
+		end
+
+	elseif command == "GodMode" then
+		local character = player.Character
+		if character then
+			local humanoid = character:FindFirstChildOfClass("Humanoid")
+			if humanoid then
+				-- Toggle God Mode
+				if GodModePlayers[player.UserId] then
+					-- Deaktiviere God Mode
+					GodModePlayers[player.UserId] = nil
+					humanoid.MaxHealth = 100
+					humanoid.Health = 100
+					print("[AdminCommand] God Mode DISABLED for " .. player.Name)
+				else
+					-- Aktiviere God Mode
+					GodModePlayers[player.UserId] = true
+					humanoid.MaxHealth = 999999
+					humanoid.Health = 999999
+					print("[AdminCommand] God Mode ENABLED for " .. player.Name)
+				end
+			end
+		end
+
+	elseif command == "Respawn" then
+		player:LoadCharacter()
+		print("[AdminCommand] Respawned " .. player.Name)
+
+	elseif command == "TeleportToSpawn" then
+		local character = player.Character
+		if character then
+			local rootPart = character:FindFirstChild("HumanoidRootPart")
+			if rootPart then
+				-- Finde Spawn
+				local spawnLocation = workspace:FindFirstChild("SpawnLocation")
+				if not spawnLocation then
+					-- Suche in GameArena
+					local gameArena = workspace:FindFirstChild("GameArena")
+					if gameArena then
+						spawnLocation = gameArena:FindFirstChild("PlayerSpawn")
+							or gameArena:FindFirstChild("SpawnLocation")
+					end
+				end
+
+				if spawnLocation then
+					rootPart.CFrame = spawnLocation.CFrame + Vector3.new(0, 5, 0)
+					print("[AdminCommand] Teleported " .. player.Name .. " to spawn")
+				else
+					warn("[AdminCommand] No spawn location found!")
+				end
+			end
+		end
+
+	else
+		warn("[AdminCommand] Unknown command: " .. command)
+	end
+end
+
+-- AdminCommand RemoteEvent Handler
+task.spawn(function()
+	task.wait(1) -- Warte auf Remote-Erstellung
+	local adminRemote = Remotes:FindFirstChild("AdminCommand")
+	if adminRemote then
+		adminRemote.OnServerEvent:Connect(function(player, command, ...)
+			HandleAdminCommand(player, command, ...)
+		end)
+		print("[MainGameServer] AdminCommand handler registered!")
+	else
+		warn("[MainGameServer] AdminCommand Remote not found!")
+	end
+end)
+
+-- Chat Commands (Fallback)
+Players.PlayerAdded:Connect(function(player)
+	player.Chatted:Connect(function(message)
+		if not IsAdmin(player) then return end
+
+		local args = string.split(message:lower(), " ")
+		local command = args[1]
+
+		if command == "/startgame" then
+			HandleAdminCommand(player, "StartGame")
+		elseif command == "/stopgame" then
+			HandleAdminCommand(player, "StopGame")
+		elseif command == "/restartgame" then
+			RestartGame()
+		elseif command == "/skipwave" then
+			HandleAdminCommand(player, "SkipWave")
+		elseif command == "/setlevel" and args[2] then
+			HandleAdminCommand(player, "SetLevel", tonumber(args[2]))
+		elseif command == "/heal" then
+			HandleAdminCommand(player, "Heal")
+		elseif command == "/killzombies" then
+			HandleAdminCommand(player, "KillAllZombies")
+		elseif command == "/morph" and args[2] then
+			HandleAdminCommand(player, "Morph", args[2])
+		elseif command == "/addexp" and args[2] then
+			HandleAdminCommand(player, "AddExp", tonumber(args[2]))
+		elseif command == "/weapon" and args[2] then
+			HandleAdminCommand(player, "EquipWeapon", tonumber(args[2]))
+		elseif command == "/godmode" then
+			HandleAdminCommand(player, "GodMode")
+		end
+	end)
+end)
+
+-- ═══════════════════════════════════════════════════════════════
+-- HEARTBEAT UPDATES
+-- ═══════════════════════════════════════════════════════════════
+
+local lastStatusUpdate = 0
+RunService.Heartbeat:Connect(function()
+	local currentTime = tick()
+
+	-- Status Update alle 5 Sekunden
+	if currentTime - lastStatusUpdate >= 5 then
+		lastStatusUpdate = currentTime
+
+		if GameState.IsRunning then
+			local zombiesAlive = ZombieManager and ZombieManager.GetZombiesAlive() or 0
+			local playerCount = #Players:GetPlayers()
+
+			-- Debug Output
+			print(string.format(
+				"[MainGameServer] Wave: %d | Zombies: %d | Players: %d | Kills: %d",
+				GameState.CurrentWave,
+				zombiesAlive,
+				playerCount,
+				GameState.TotalKills
+			))
+		end
+	end
+end)
+
+print("[MainGameServer] Initialization complete! Waiting for modules...")
+
+-- Starte Module-Loading in separatem Thread (MUSS am Ende sein, damit alle Funktionen definiert sind!)
+task.spawn(LoadModules)

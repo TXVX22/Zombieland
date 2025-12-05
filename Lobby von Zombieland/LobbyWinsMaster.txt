@@ -1,0 +1,234 @@
+-- LobbyWinsMaster.lua
+-- WICHTIG: Dieses Script managed NUR die Wins in der Lobby
+-- Platzierung: ServerScriptService/LobbyWinsMaster (Script)
+-- Arbeitet zusammen mit dem PanzaroMaster
+
+local Players = game:GetService("Players")
+local DataStoreService = game:GetService("DataStoreService")
+local RunService = game:GetService("RunService")
+
+-- GLEICHER DataStore wie im MainGame!
+local winsDataStore = DataStoreService:GetOrderedDataStore("MultiplayerWins_v1")
+
+-- Cache für Wins
+local playerWinsCache = {}
+local winsLoadCompleted = {}
+
+print("[WINS MASTER] =====================================")
+print("[WINS MASTER] Starting Wins Master Controller")
+print("[WINS MASTER] =====================================")
+
+-- Funktion zum Laden der Wins
+local function loadPlayerWins(player)
+	print("[WINS MASTER] Loading wins for", player.Name, "...")
+
+	-- Markiere als in Bearbeitung
+	winsLoadCompleted[player] = false
+
+	-- Lade aus DataStore
+	local loadedWins = nil
+	local attempts = 0
+
+	repeat
+		attempts = attempts + 1
+
+		local success, result = pcall(function()
+			return winsDataStore:GetAsync(player.UserId)
+		end)
+
+		if success then
+			loadedWins = result or 0
+			print("[WINS MASTER] DataStore loaded:", loadedWins, "wins for", player.Name, "(Attempt", attempts..")")
+			break
+		else
+			warn("[WINS MASTER] DataStore load failed (Attempt", attempts.."):", result)
+			task.wait(0.5)
+		end
+	until loadedWins ~= nil or attempts >= 3
+
+	-- Falls DataStore fehlschlägt, nutze 0
+	if loadedWins == nil then
+		loadedWins = 0
+		print("[WINS MASTER] No data found - using 0 wins")
+	end
+
+	-- Speichere im Cache
+	playerWinsCache[player.UserId] = loadedWins
+
+	-- Warte kurz damit PanzaroMaster zuerst lädt
+	task.wait(0.5)
+
+	-- Update/Erstelle Leaderstats (PanzaroMaster hat sie schon erstellt)
+	local leaderstats = player:FindFirstChild("leaderstats")
+	if not leaderstats then
+		-- Falls PanzaroMaster noch nicht fertig ist, erstelle selbst
+		leaderstats = Instance.new("Folder")
+		leaderstats.Name = "leaderstats"
+		leaderstats.Parent = player
+	end
+
+	-- Wins Value
+	local wins = leaderstats:FindFirstChild("Wins")
+	if not wins then
+		wins = Instance.new("IntValue")
+		wins.Name = "Wins"
+		wins.Parent = leaderstats
+	end
+
+	wins.Value = loadedWins
+
+	-- Markiere als fertig
+	winsLoadCompleted[player] = true
+
+	-- Überwache für 10 Sekunden dass niemand die Wins überschreibt
+	task.spawn(function()
+		local endTime = tick() + 10
+		while tick() < endTime do
+			task.wait(0.5)
+
+			if leaderstats.Parent and wins.Parent then
+				if wins.Value ~= loadedWins then
+					print("[WINS MASTER] OVERRIDE: Correcting wins from", wins.Value, "to", loadedWins)
+					wins.Value = loadedWins
+				end
+			else
+				break
+			end
+		end
+
+		print("[WINS MASTER] Monitoring ended for", player.Name, "- Final wins:", loadedWins)
+	end)
+
+	-- Force update des Leaderboards nach dem Laden
+	if _G.ForceUpdateLeaderboard then
+		task.wait(1)
+		_G.ForceUpdateLeaderboard()
+	end
+
+	print("[WINS MASTER] ✅ Completed loading for", player.Name, ":", loadedWins, "Wins")
+
+	return loadedWins
+end
+
+-- Funktion zum Speichern
+local function savePlayerWins(player, amount)
+	if not amount then
+		local leaderstats = player:FindFirstChild("leaderstats")
+		if leaderstats then
+			local wins = leaderstats:FindFirstChild("Wins")
+			if wins then
+				amount = wins.Value
+			end
+		end
+	end
+
+	if amount then
+		playerWinsCache[player.UserId] = amount
+
+		local success, err = pcall(function()
+			winsDataStore:SetAsync(player.UserId, amount)
+		end)
+
+		if success then
+			print("[WINS MASTER] Saved", amount, "wins for", player.Name)
+		else
+			warn("[WINS MASTER] Failed to save wins:", err)
+		end
+	end
+end
+
+-- Global Functions
+_G.GetPlayerWins = function(player)
+	-- Warte bis geladen
+	local timeout = tick() + 5
+	while not winsLoadCompleted[player] and tick() < timeout do
+		task.wait(0.1)
+	end
+
+	return playerWinsCache[player.UserId] or 0
+end
+
+_G.SetPlayerWins = function(player, amount)
+	print("[WINS MASTER] Setting", player.Name, "to", amount, "wins")
+
+	-- Update Cache
+	playerWinsCache[player.UserId] = amount
+
+	-- Update Leaderstats
+	local leaderstats = player:FindFirstChild("leaderstats")
+	if leaderstats then
+		local wins = leaderstats:FindFirstChild("Wins")
+		if wins then
+			wins.Value = amount
+		end
+	end
+
+	-- Save to DataStore
+	savePlayerWins(player, amount)
+
+	-- Force Leaderboard Update
+	if _G.ForceUpdateLeaderboard then
+		_G.ForceUpdateLeaderboard()
+	end
+end
+
+_G.AddPlayerWins = function(player, amount)
+	local current = _G.GetPlayerWins(player)
+	_G.SetPlayerWins(player, current + amount)
+end
+
+-- Player Events
+Players.PlayerAdded:Connect(function(player)
+	loadPlayerWins(player)
+end)
+
+Players.PlayerRemoving:Connect(function(player)
+	savePlayerWins(player)
+	winsLoadCompleted[player] = nil
+end)
+
+-- Debug Commands
+Players.PlayerAdded:Connect(function(player)
+	player.Chatted:Connect(function(msg)
+		if msg:lower() == "/checkwins" then
+			print("[WINS MASTER] === CHECK FOR", player.Name, "===")
+			print("  Cache:", playerWinsCache[player.UserId] or "nil")
+
+			local leaderstats = player:FindFirstChild("leaderstats")
+			if leaderstats then
+				local wins = leaderstats:FindFirstChild("Wins")
+				if wins then
+					print("  Leaderstats:", wins.Value)
+				end
+			end
+
+			pcall(function()
+				local stored = winsDataStore:GetAsync(player.UserId) or 0
+				print("  DataStore:", stored)
+			end)
+
+		elseif msg:lower():sub(1, 8) == "/setwins" then
+			local amount = tonumber(msg:sub(10)) or 0
+			_G.SetPlayerWins(player, amount)
+			print("[WINS MASTER] Set to", amount)
+
+		elseif msg:lower() == "/testwins" then
+			_G.AddPlayerWins(player, 1)
+			print("[WINS MASTER] Added 1 win for testing")
+		end
+	end)
+end)
+
+-- Auto-save every 60 seconds
+task.spawn(function()
+	while true do
+		task.wait(60)
+		for _, player in ipairs(Players:GetPlayers()) do
+			savePlayerWins(player)
+		end
+		print("[WINS MASTER] Auto-saved all player wins")
+	end
+end)
+
+print("[WINS MASTER] System ready!")
+print("[WINS MASTER] Commands: /checkwins, /setwins [amount], /testwins")

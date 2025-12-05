@@ -1,0 +1,537 @@
+-- FIXED LOBBY MainGameHybridMorphClient.lua
+-- StarterPlayer/StarterPlayerScripts/MainGameHybridMorphClient.lua (LocalScript)
+
+print("[MAINGAME HYBRID CLIENT] Loading with INSTANT animation system...")
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local player = Players.LocalPlayer
+
+-- LOBBY FOLDERS
+local assetsFolder = ReplicatedStorage:WaitForChild("Assets", 10)
+if not assetsFolder then
+	warn("[MAINGAME HYBRID CLIENT] Assets folder not found!")
+	return
+end
+
+local remotesFolder = ReplicatedStorage:WaitForChild("ShopRemotes", 10)
+if not remotesFolder then
+	warn("[MAINGAME HYBRID CLIENT] ShopRemotes folder not found!")
+	return
+end
+
+local animationSyncRemote = remotesFolder:WaitForChild("SyncMorphAnimations", 10)
+if not animationSyncRemote then
+	warn("[MAINGAME HYBRID CLIENT] SyncMorphAnimations remote not found!")
+	return
+end
+
+-- Load soldier data modules
+local soldierSkinDataModule = ReplicatedStorage:WaitForChild("SoldierSkinData", 10)
+if not soldierSkinDataModule then
+	warn("[MAINGAME HYBRID CLIENT] SoldierSkinData module not found!")
+	return
+end
+local SoldierSkinData = require(soldierSkinDataModule)
+
+local SoldierData = nil
+local dataFolder = ReplicatedStorage:FindFirstChild("Data")
+if dataFolder then
+	local soldierDataModule = dataFolder:FindFirstChild("SoldierData")
+	if soldierDataModule then
+		SoldierData = require(soldierDataModule)
+		print("[MAINGAME HYBRID CLIENT] SoldierData loaded from Data folder")
+	end
+end
+
+if not SoldierData then
+	local soldierDataModule = ReplicatedStorage:FindFirstChild("SoldierData")
+	if soldierDataModule then
+		SoldierData = require(soldierDataModule)
+		print("[MAINGAME HYBRID CLIENT] SoldierData loaded from ReplicatedStorage")
+	else
+		warn("[MAINGAME HYBRID CLIENT] SoldierData not found - animations won't work!")
+	end
+end
+
+-- Track animations for all players
+local playerAnimations = {}
+
+-- ANIMATION CONSTANTS (SAME AS MAINGAME!)
+local WALK_SPEED_MULTIPLIER = 1.0
+local MIN_WALK_SPEED = 0.5
+local MAX_WALK_SPEED = 2.0
+local SPEED_SMOOTHING = 0.25
+local MOVEMENT_THRESHOLD = 0.5
+
+-- ===== HELPER FUNCTIONS =====
+
+local function formatAnimationId(id)
+	if not id or id == "" then
+		return nil
+	end
+
+	if string.match(id, "^rbxassetid://") or string.match(id, "^http") then
+		return id
+	end
+
+	return "rbxassetid://" .. id
+end
+
+local function findSoldierInfo(skinName, epoch)
+	if not skinName then return nil end
+
+	local soldierInfo = nil
+
+	if SoldierData then
+		for soldierKey, soldierDataEntry in pairs(SoldierData) do
+			local normalizedSoldierName = (soldierDataEntry.Model or soldierDataEntry.Name or ""):lower():gsub("[öäü]", {["ö"]="oe", ["ä"]="ae", ["ü"]="ue"})
+			local normalizedSearchName = skinName:lower():gsub("[öäü]", {["ö"]="oe", ["ä"]="ae", ["ü"]="ue"})
+
+			if normalizedSoldierName == normalizedSearchName then
+				soldierInfo = {
+					name = soldierDataEntry.Model or soldierDataEntry.Name,
+					animations = soldierDataEntry.Animations,
+					animationSpeeds = soldierDataEntry.AnimationSpeeds
+				}
+				print("[MAINGAME HYBRID CLIENT] Found animations in SoldierData for:", skinName)
+				break
+			end
+
+			if (soldierDataEntry.Name or ""):lower() == normalizedSearchName then
+				soldierInfo = {
+					name = soldierDataEntry.Model or soldierDataEntry.Name,
+					animations = soldierDataEntry.Animations,
+					animationSpeeds = soldierDataEntry.AnimationSpeeds
+				}
+				print("[MAINGAME HYBRID CLIENT] Found animations in SoldierData (by Name) for:", skinName)
+				break
+			end
+		end
+	end
+
+	if not soldierInfo and SoldierData then
+		local nameMap = {
+			["Höhlenmensch"] = "Hoehlenmensch",
+			["Bogenschütze"] = "Bogenschuetze", 
+			["Armbrustschütze"] = "Armbrustschuetze",
+			["Wächter"] = "Waechter",
+			["ModernNahkämpfer"] = "ModernNahkaempfer"
+		}
+
+		local mappedName = nameMap[skinName]
+		if mappedName and SoldierData[mappedName] then
+			local soldierDataEntry = SoldierData[mappedName]
+			soldierInfo = {
+				name = soldierDataEntry.Model or soldierDataEntry.Name,
+				animations = soldierDataEntry.Animations,
+				animationSpeeds = soldierDataEntry.AnimationSpeeds
+			}
+			print("[MAINGAME HYBRID CLIENT] Found animations using name mapping for:", skinName, "->", mappedName)
+		end
+	end
+
+	return soldierInfo
+end
+
+-- ===== CLEANUP FUNCTION =====
+
+local function cleanupPlayerAnimations(targetPlayer)
+	if playerAnimations[targetPlayer] then
+		local anims = playerAnimations[targetPlayer]
+
+		if anims.connection then
+			anims.connection:Disconnect()
+		end
+
+		if anims.walkTrack then
+			anims.walkTrack:Stop()
+			anims.walkTrack:Destroy()
+		end
+		if anims.idleTrack then
+			anims.idleTrack:Stop()
+			anims.idleTrack:Destroy()
+		end
+
+		if anims.controller and anims.controller.Parent then
+			anims.controller:Destroy()
+		end
+
+		playerAnimations[targetPlayer] = nil
+
+		if targetPlayer == player then
+			local character = targetPlayer.Character
+			if character then
+				local animateScript = character:FindFirstChild("Animate")
+				if animateScript then
+					animateScript.Disabled = false
+				end
+			end
+		end
+
+		print("[MAINGAME HYBRID CLIENT] Cleaned up animations for", targetPlayer.Name)
+	end
+end
+
+-- ===== MAIN ANIMATION SETUP FUNCTION (FIXED WITH VELOCITY AVERAGING) =====
+
+local function setupMorphAnimations(targetPlayer, skinName, epoch)
+	print("[MAINGAME HYBRID CLIENT] Setting up animations for", targetPlayer.Name, "with skin:", skinName)
+
+	cleanupPlayerAnimations(targetPlayer)
+
+	if not skinName then
+		print("[MAINGAME HYBRID CLIENT] No skin specified, skipping animation setup")
+		return
+	end
+
+	local character = targetPlayer.Character
+	if not character then
+		warn("[MAINGAME HYBRID CLIENT] No character found for", targetPlayer.Name)
+		return
+	end
+
+	local humanoid = character:FindFirstChild("Humanoid")
+	if not humanoid then
+		warn("[MAINGAME HYBRID CLIENT] No humanoid found for", targetPlayer.Name)
+		return
+	end
+
+	wait()
+
+	local morphModel = nil
+	for _, child in ipairs(character:GetChildren()) do
+		if child:IsA("Model") and child.Name:match("^ServerMorph_") then
+			morphModel = child
+			break
+		end
+	end
+
+	if not morphModel then
+		warn("[MAINGAME HYBRID CLIENT] No morph model found for", targetPlayer.Name)
+		wait(0.5)
+		for _, child in ipairs(character:GetChildren()) do
+			if child:IsA("Model") and child.Name:match("^ServerMorph_") then
+				morphModel = child
+				break
+			end
+		end
+
+		if not morphModel then
+			warn("[MAINGAME HYBRID CLIENT] Still no morph model found, aborting")
+			return
+		end
+	end
+
+	local soldierInfo = findSoldierInfo(skinName, epoch)
+	if not soldierInfo then
+		warn("[MAINGAME HYBRID CLIENT] No soldier info found for:", skinName)
+		soldierInfo = {
+			animations = {
+				Walk = "913402848",
+				Wait = "913372852"
+			}
+		}
+	end
+
+	print("[MAINGAME HYBRID CLIENT] Found soldier info:", soldierInfo.name or "default")
+
+	local animController = Instance.new("AnimationController")
+	animController.Name = "ClientAnimationController"
+	animController.Parent = morphModel
+
+	local morphAnimator = Instance.new("Animator")
+	morphAnimator.Parent = animController
+
+	playerAnimations[targetPlayer] = {
+		controller = animController,
+		animator = morphAnimator,
+		skinName = skinName,
+		epoch = epoch,
+		currentSpeed = 1.0,
+		targetSpeed = 1.0,
+		morphModel = morphModel
+	}
+
+	if targetPlayer == player then
+		local animateScript = character:FindFirstChild("Animate")
+		if animateScript then
+			animateScript.Disabled = true
+			print("[MAINGAME HYBRID CLIENT] Disabled default animations for local player")
+		end
+	end
+
+	if soldierInfo.animations then
+		if soldierInfo.animations.Walk then
+			local walkId = formatAnimationId(soldierInfo.animations.Walk)
+			if walkId then
+				local walkAnim = Instance.new("Animation")
+				walkAnim.AnimationId = walkId
+				walkAnim.Name = "WalkAnimation"
+
+				local success, walkTrack = pcall(function()
+					return morphAnimator:LoadAnimation(walkAnim)
+				end)
+
+				if success and walkTrack then
+					walkTrack.Priority = Enum.AnimationPriority.Movement
+					walkTrack.Looped = true
+					playerAnimations[targetPlayer].walkTrack = walkTrack
+
+					local baseSpeed = 1.0
+					if soldierInfo.animationSpeeds and soldierInfo.animationSpeeds.Walk then
+						baseSpeed = soldierInfo.animationSpeeds.Walk
+					end
+					playerAnimations[targetPlayer].baseWalkSpeed = baseSpeed
+
+					print("[MAINGAME HYBRID CLIENT] Walk animation loaded, ID:", walkId, "Base speed:", baseSpeed)
+				else
+					warn("[MAINGAME HYBRID CLIENT] Failed to load walk animation:", walkId)
+				end
+			end
+		end
+
+		local idleAnimId = soldierInfo.animations.Wait or soldierInfo.animations.BaseIdle
+		if idleAnimId then
+			local formattedIdleId = formatAnimationId(idleAnimId)
+			if formattedIdleId then
+				local idleAnim = Instance.new("Animation")
+				idleAnim.AnimationId = formattedIdleId
+				idleAnim.Name = "IdleAnimation"
+
+				local success, idleTrack = pcall(function()
+					return morphAnimator:LoadAnimation(idleAnim)
+				end)
+
+				if success and idleTrack then
+					idleTrack.Priority = Enum.AnimationPriority.Idle
+					idleTrack.Looped = true
+					playerAnimations[targetPlayer].idleTrack = idleTrack
+
+					print("[MAINGAME HYBRID CLIENT] Idle animation loaded, ID:", formattedIdleId)
+				else
+					warn("[MAINGAME HYBRID CLIENT] Failed to load idle animation:", formattedIdleId)
+				end
+			end
+		end
+	end
+
+	-- ANIMATION CONTROL SYSTEM (MIT VELOCITY AVERAGING WIE IM MAINGAME!)
+	local anims = playerAnimations[targetPlayer]
+	if anims and (anims.walkTrack or anims.idleTrack) then
+		local lastState = "idle"
+		local velocityHistory = {}  -- WICHTIG: Velocity History für Smoothing!
+
+		anims.currentSpeed = 1.0
+		anims.targetSpeed = 1.0
+
+		if anims.idleTrack then
+			anims.idleTrack:Play()
+			print("[MAINGAME HYBRID CLIENT] Started idle animation for", targetPlayer.Name)
+		end
+
+		anims.connection = RunService.Heartbeat:Connect(function()
+			if not character or not character.Parent then
+				cleanupPlayerAnimations(targetPlayer)
+				return
+			end
+
+			local rootPart = character:FindFirstChild("HumanoidRootPart")
+			if not rootPart then return end
+
+			-- NEU: Für andere Spieler (nicht local player) nutze synthetische Velocity
+			-- weil die CFrame-Interpolation die echte Velocity zerstört
+			local velocity = rootPart.Velocity
+			if targetPlayer ~= player and _G.SyntheticVelocities and _G.SyntheticVelocities[targetPlayer] then
+				velocity = _G.SyntheticVelocities[targetPlayer]
+			end
+
+			local horizontalVelocity = Vector3.new(velocity.X, 0, velocity.Z)
+			local speed = horizontalVelocity.Magnitude
+
+			-- VELOCITY AVERAGING (WIE IM MAINGAME!)
+			table.insert(velocityHistory, speed)
+			if #velocityHistory > 3 then  -- Nur 3 Frames für schnellere Response
+				table.remove(velocityHistory, 1)
+			end
+
+			-- Calculate average speed
+			local avgSpeed = 0
+			for _, v in ipairs(velocityHistory) do
+				avgSpeed = avgSpeed + v
+			end
+			avgSpeed = avgSpeed / #velocityHistory
+
+			local humanoidState = humanoid:GetState()
+			local inAir = humanoidState == Enum.HumanoidStateType.Freefall or 
+				humanoidState == Enum.HumanoidStateType.Flying or
+				humanoidState == Enum.HumanoidStateType.Jumping
+
+			-- Use AVERAGE speed for detection (wie im MainGame!)
+			if avgSpeed > MOVEMENT_THRESHOLD and not inAir then
+				if lastState ~= "walk" then
+					if anims.idleTrack and anims.idleTrack.IsPlaying then
+						anims.idleTrack:Stop(0.1)
+					end
+					if anims.walkTrack then
+						anims.walkTrack:Play(0.1)
+						print("[ANIM DEBUG] Started walk for", targetPlayer.Name, "AvgSpeed:", avgSpeed)
+					end
+					lastState = "walk"
+				end
+
+				-- Animation Speed basierend auf Movement
+				if anims.walkTrack and anims.walkTrack.IsPlaying then
+					local humanoidWalkSpeed = humanoid.WalkSpeed or 16
+					local targetSpeed = (avgSpeed / humanoidWalkSpeed) * WALK_SPEED_MULTIPLIER
+
+					if anims.baseWalkSpeed then
+						targetSpeed = targetSpeed * anims.baseWalkSpeed
+					end
+
+					-- Minimum speed wenn bewegend
+					if avgSpeed > MOVEMENT_THRESHOLD then
+						targetSpeed = math.max(targetSpeed, MIN_WALK_SPEED)
+					end
+
+					targetSpeed = math.clamp(targetSpeed, MIN_WALK_SPEED, MAX_WALK_SPEED)
+
+					-- Smooth speed transition
+					anims.targetSpeed = targetSpeed
+					anims.currentSpeed = anims.currentSpeed + (anims.targetSpeed - anims.currentSpeed) * SPEED_SMOOTHING
+
+					anims.walkTrack:AdjustSpeed(anims.currentSpeed)
+				end
+			elseif avgSpeed <= MOVEMENT_THRESHOLD and not inAir then
+				if lastState ~= "idle" then
+					if anims.walkTrack and anims.walkTrack.IsPlaying then
+						anims.walkTrack:Stop(0.1)
+					end
+					if anims.idleTrack then
+						anims.idleTrack:Play(0.1)
+						print("[ANIM DEBUG] Started idle for", targetPlayer.Name, "AvgSpeed:", avgSpeed)
+					end
+					lastState = "idle"
+
+					anims.currentSpeed = 1.0
+					anims.targetSpeed = 1.0
+				end
+			else
+				-- In air
+				if anims.walkTrack and anims.walkTrack.IsPlaying then
+					anims.walkTrack:Stop(0.2)
+				end
+				if anims.idleTrack and anims.idleTrack.IsPlaying then
+					anims.idleTrack:Stop(0.2)
+				end
+				lastState = "air"
+			end
+
+			-- Keep morph aligned
+			if targetPlayer == player and morphModel and morphModel.PrimaryPart and morphModel.PrimaryPart ~= rootPart then
+				local morphRoot = morphModel.PrimaryPart
+				morphRoot.CFrame = morphRoot.CFrame:Lerp(rootPart.CFrame, 0.8)
+			end
+		end)
+
+		print("[MAINGAME HYBRID CLIENT] Animation system activated with velocity averaging")
+	else
+		warn("[MAINGAME HYBRID CLIENT] No animations loaded for", targetPlayer.Name)
+	end
+end
+
+-- Rest des Codes bleibt gleich...
+-- (Remote Event Handler, Character Respawn Handler, etc.)
+
+animationSyncRemote.OnClientEvent:Connect(function(targetPlayer, skinName, epoch)
+	print("[MAINGAME HYBRID CLIENT] Received animation sync for", targetPlayer.Name, "->", skinName or "reset")
+
+	if skinName then
+		wait(0.2)
+		setupMorphAnimations(targetPlayer, skinName, epoch)
+	else
+		cleanupPlayerAnimations(targetPlayer)
+	end
+end)
+
+local function onCharacterAdded(targetPlayer)
+	wait(2)
+
+	local character = targetPlayer.Character
+	if character then
+		for _, child in ipairs(character:GetChildren()) do
+			if child:IsA("Model") and child.Name:match("^ServerMorph_") then
+				local skinTag = child:FindFirstChild("MorphSkinName")
+				local epochTag = child:FindFirstChild("MorphEpoch")
+
+				if skinTag and epochTag then
+					setupMorphAnimations(targetPlayer, skinTag.Value, epochTag.Value)
+					print("[MAINGAME HYBRID CLIENT] Auto-setup animations for respawned", targetPlayer.Name)
+				end
+				break
+			end
+		end
+	end
+end
+
+Players.PlayerAdded:Connect(function(targetPlayer)
+	targetPlayer.CharacterAdded:Connect(function()
+		onCharacterAdded(targetPlayer)
+	end)
+
+	targetPlayer.CharacterRemoving:Connect(function()
+		cleanupPlayerAnimations(targetPlayer)
+	end)
+end)
+
+for _, targetPlayer in ipairs(Players:GetPlayers()) do
+	if targetPlayer.Character then
+		onCharacterAdded(targetPlayer)
+	end
+
+	targetPlayer.CharacterAdded:Connect(function()
+		onCharacterAdded(targetPlayer)
+	end)
+
+	targetPlayer.CharacterRemoving:Connect(function()
+		cleanupPlayerAnimations(targetPlayer)
+	end)
+end
+
+Players.PlayerRemoving:Connect(function(targetPlayer)
+	cleanupPlayerAnimations(targetPlayer)
+end)
+
+player.Chatted:Connect(function(message)
+	if message:lower() == "/animdebug" then
+		print("[MAINGAME HYBRID CLIENT] === ANIMATION DEBUG ===")
+		for p, data in pairs(playerAnimations) do
+			print("Player:", p.Name)
+			print("  Skin:", data.skinName or "none")
+			print("  Current Speed:", data.currentSpeed or 1)
+			print("  Target Speed:", data.targetSpeed or 1)
+			print("  Walk Track:", data.walkTrack and "loaded" or "none")
+			print("  Idle Track:", data.idleTrack and "loaded" or "none")
+		end
+	elseif message:lower() == "/velocity" then
+		local character = player.Character
+		if character then
+			local rootPart = character:FindFirstChild("HumanoidRootPart")
+			if rootPart then
+				for i = 1, 10 do
+					local vel = rootPart.Velocity
+					local speed = Vector3.new(vel.X, 0, vel.Z).Magnitude
+					print("[VELOCITY]", string.format("%.2f", speed), "studs/s")
+					wait(0.2)
+				end
+			end
+		end
+	end
+end)
+
+print("[MAINGAME HYBRID CLIENT] System loaded with velocity averaging!")
+print("Movement threshold:", MOVEMENT_THRESHOLD)
+print("Speed smoothing:", SPEED_SMOOTHING)
+print("Debug commands: /animdebug, /velocity")

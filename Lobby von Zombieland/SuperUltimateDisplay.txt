@@ -1,0 +1,112 @@
+-- Dies kommt in deine AOW Multiplayer/Singleplayer Experiences
+-- StarterPlayer/StarterPlayerScripts/SuperUltimateDisplay (LocalScript)
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
+
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+
+-- Warte auf Remote
+local ultimateRemotes = ReplicatedStorage:WaitForChild("UltimateRemotes", 10)
+local getSuperRoundsFunction = ultimateRemotes and ultimateRemotes:WaitForChild("GetSuperUltimateRounds", 5)
+
+-- Funktion um Runden zu bekommen
+local function getSuperUltimateRounds()
+	if getSuperRoundsFunction then
+		local success, rounds = pcall(function()
+			return getSuperRoundsFunction:InvokeServer()
+		end)
+		if success then
+			return rounds or 0
+		end
+	end
+	return 0
+end
+
+-- GUI erstellen
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "SuperUltimateDisplay"
+screenGui.ResetOnSpawn = false
+screenGui.Parent = playerGui
+
+-- Hauptframe
+local frame = Instance.new("Frame")
+frame.Size = UDim2.new(0, 200, 0, 60)
+frame.Position = UDim2.new(0, 10, 0, 100)
+frame.BackgroundColor3 = Color3.new(0.1, 0.1, 0.1)
+frame.BorderSizePixel = 0
+frame.Parent = screenGui
+
+-- Runden Label
+local roundsLabel = Instance.new("TextLabel")
+roundsLabel.Size = UDim2.new(1, 0, 0.6, 0)
+roundsLabel.BackgroundTransparency = 1
+roundsLabel.Text = "🔥 Super Ultimate"
+roundsLabel.TextColor3 = Color3.new(1, 0.8, 0)
+roundsLabel.TextScaled = true
+roundsLabel.Font = Enum.Font.SourceSansBold
+roundsLabel.Parent = frame
+
+-- Anzahl Label
+local countLabel = Instance.new("TextLabel")
+countLabel.Size = UDim2.new(1, 0, 0.4, 0)
+countLabel.Position = UDim2.new(0, 0, 0.6, 0)
+countLabel.BackgroundTransparency = 1
+countLabel.Text = "0 Runden"
+countLabel.TextColor3 = Color3.new(1, 1, 1)
+countLabel.TextScaled = true
+countLabel.Font = Enum.Font.SourceSans
+countLabel.Parent = frame
+
+-- Update Loop
+spawn(function()
+	while true do
+		local rounds = getSuperUltimateRounds()
+
+		if rounds > 0 then
+			frame.Visible = true
+			countLabel.Text = rounds .. " Runden"
+			countLabel.TextColor3 = Color3.new(0, 1, 0)
+
+			-- Glow Effekt
+			if not frame:FindFirstChild("UIStroke") then
+				local stroke = Instance.new("UIStroke")
+				stroke.Color = Color3.new(1, 0.8, 0)
+				stroke.Thickness = 2
+				stroke.Parent = frame
+
+				-- Pulsierender Effekt
+				local tween = TweenService:Create(stroke,
+					TweenInfo.new(1, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true),
+					{Transparency = 0.7}
+				)
+				tween:Play()
+			end
+
+			-- Info Text
+			local infoLabel = frame:FindFirstChild("InfoLabel")
+			if not infoLabel then
+				infoLabel = Instance.new("TextLabel")
+				infoLabel.Name = "InfoLabel"
+				infoLabel.Size = UDim2.new(0, 250, 0, 30)
+				infoLabel.Position = UDim2.new(1.1, 0, 0.5, -15)
+				infoLabel.BackgroundColor3 = Color3.new(0.1, 0.1, 0.1)
+				infoLabel.BorderSizePixel = 1
+				infoLabel.BorderColor3 = Color3.new(1, 0.8, 0)
+				infoLabel.Text = "Du kannst 2 Ultimates nutzen!"
+				infoLabel.TextColor3 = Color3.new(1, 1, 1)
+				infoLabel.TextScaled = true
+				infoLabel.Font = Enum.Font.SourceSans
+				infoLabel.Parent = frame
+			end
+		else
+			frame.Visible = false
+		end
+
+		wait(1)
+	end
+end)
+
+print("[SUPER ULTIMATE DISPLAY] Geladen!")

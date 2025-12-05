@@ -1,0 +1,603 @@
+-- FenceManager.lua
+-- Platzierung: ServerScriptService/Modules/FenceManager (ModuleScript)
+
+local FenceManager = {}
+
+-- Services
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
+local RunService = game:GetService("RunService")
+
+-- Modules
+local GameConfig = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("GameConfig"))
+
+-- Remotes (warten auf MainGameServer)
+local Remotes = ReplicatedStorage:WaitForChild("Remotes", 30)
+local FenceBuildStartRemote = Remotes:WaitForChild("FenceBuildStart", 10)
+local FenceBuildProgressRemote = Remotes:WaitForChild("FenceBuildProgress", 10)
+local FenceBuildCompleteRemote = Remotes:WaitForChild("FenceBuildComplete", 10)
+local FenceDestroyedRemote = Remotes:WaitForChild("FenceDestroyed", 10)
+local FenceDamagedRemote = Remotes:WaitForChild("FenceDamaged", 10)
+
+-- Assets
+local FenceTemplate = ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Zaun"):WaitForChild("Zaun")
+
+-- State
+local FenceData = {} -- [fencePartName] = { Built = false, Health = 0, Model = nil, Bauplaetze = {} }
+local BuildProgress = {} -- [player] = { FenceName = "", Progress = 0, StartTime = 0 }
+local BuiltFences = {} -- Liste aller gebauten Zaun-Models
+
+-- Workspace References
+local FencesFolder = workspace:WaitForChild("Zaeune und Baupunkte")
+
+-- ═══════════════════════════════════════════════════════════════
+-- INITIALISIERUNG
+-- ═══════════════════════════════════════════════════════════════
+
+function FenceManager.Initialize()
+	print("[FenceManager] Initializing...")
+
+	-- Lade alle Flaechen und Zaeune
+	for flaecheName, flaecheData in pairs(GameConfig.Fence.Groups) do
+		local flaeche = FencesFolder:FindFirstChild(flaecheName)
+		if flaeche then
+			for zaunName, zaunData in pairs(flaecheData) do
+				local zaunPart = flaeche:FindFirstChild(zaunName)
+				if zaunPart then
+					-- Initialisiere Zaun-Daten
+					FenceData[zaunName] = {
+						Built = false,
+						Health = 0,
+						MaxHealth = GameConfig.Fence.Health,
+						Model = nil,
+						Part = zaunPart,
+						Flaeche = flaecheName,
+						Bauplaetze = {}
+					}
+
+					-- Finde Bauplaetze
+					for _, bauplatzName in pairs(zaunData.Bauplaetze) do
+						local bauplatz = zaunPart:FindFirstChild(bauplatzName)
+						if bauplatz then
+							table.insert(FenceData[zaunName].Bauplaetze, bauplatz)
+							FenceManager.SetupBauplatz(bauplatz, zaunName)
+						else
+							warn("[FenceManager] Bauplatz not found: " .. bauplatzName .. " in " .. zaunName)
+						end
+					end
+
+					-- Mache Zaun-Part unsichtbar (wird beim Bauen sichtbar)
+					zaunPart.Transparency = 1
+					zaunPart.CanCollide = false
+
+					print("[FenceManager] Registered fence: " .. zaunName .. " with " .. #FenceData[zaunName].Bauplaetze .. " Bauplaetze")
+				else
+					warn("[FenceManager] Fence not found: " .. zaunName .. " in " .. flaecheName)
+				end
+			end
+		else
+			warn("[FenceManager] Flaeche not found: " .. flaecheName)
+		end
+	end
+
+	-- Player Touch Detection Loop
+	RunService.Heartbeat:Connect(function()
+		FenceManager.CheckBuildProgress()
+	end)
+
+	print("[FenceManager] Initialization complete!")
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- BAUPLATZ SETUP
+-- ═══════════════════════════════════════════════════════════════
+
+function FenceManager.SetupBauplatz(bauplatz, zaunName)
+	-- Mache Bauplatz visuell erkennbar
+	bauplatz.Transparency = 0.7
+	bauplatz.Color = Color3.fromRGB(100, 200, 100) -- Grün für verfügbar
+	bauplatz.Material = Enum.Material.Neon
+	bauplatz.CanCollide = false
+
+	-- Setze Attribute
+	bauplatz:SetAttribute("IsBauplatz", true)
+	bauplatz:SetAttribute("FenceName", zaunName)
+
+	-- Touch Events
+	bauplatz.Touched:Connect(function(hit)
+		local character = hit:FindFirstAncestorOfClass("Model")
+		if character then
+			local player = Players:GetPlayerFromCharacter(character)
+			if player then
+				FenceManager.OnPlayerTouchBauplatz(player, bauplatz, zaunName)
+			end
+		end
+	end)
+
+	bauplatz.TouchEnded:Connect(function(hit)
+		local character = hit:FindFirstAncestorOfClass("Model")
+		if character then
+			local player = Players:GetPlayerFromCharacter(character)
+			if player then
+				FenceManager.OnPlayerLeaveBauplatz(player)
+			end
+		end
+	end)
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- BUILD SYSTEM
+-- ═══════════════════════════════════════════════════════════════
+
+function FenceManager.OnPlayerTouchBauplatz(player, bauplatz, zaunName)
+	-- Prüfe ob Zaun bereits gebaut
+	if FenceData[zaunName] and FenceData[zaunName].Built then
+		return
+	end
+
+	-- Prüfe ob Spieler bereits baut
+	if BuildProgress[player] and BuildProgress[player].FenceName ~= zaunName then
+		-- Spieler wechselt Bauplatz
+		FenceManager.OnPlayerLeaveBauplatz(player)
+	end
+
+	-- Starte Bau-Progress
+	if not BuildProgress[player] then
+		BuildProgress[player] = {
+			FenceName = zaunName,
+			Bauplatz = bauplatz,
+			StandProgress = 0,
+			BuildProgress = 0,
+			Phase = "standing", -- "standing" oder "building"
+			StartTime = tick(),
+			LastUpdate = tick()
+		}
+
+		FenceBuildStartRemote:FireClient(player, zaunName, "standing")
+		print("[FenceManager] " .. player.Name .. " started standing at " .. zaunName)
+	end
+end
+
+function FenceManager.OnPlayerLeaveBauplatz(player)
+	if BuildProgress[player] then
+		local progress = BuildProgress[player]
+		print("[FenceManager] " .. player.Name .. " left bauplatz for " .. progress.FenceName)
+
+		-- Informiere Client über Abbruch
+		FenceBuildProgressRemote:FireClient(player, progress.FenceName, 0, "cancelled")
+
+		BuildProgress[player] = nil
+	end
+end
+
+function FenceManager.CheckBuildProgress()
+	local currentTime = tick()
+
+	for player, progress in pairs(BuildProgress) do
+		-- Prüfe ob Spieler noch existiert
+		if not player.Parent then
+			BuildProgress[player] = nil
+			continue
+		end
+
+		-- Prüfe ob Spieler noch am Leben ist
+		local character = player.Character
+		if not character then
+			FenceManager.OnPlayerLeaveBauplatz(player)
+			continue
+		end
+
+		local humanoid = character:FindFirstChildOfClass("Humanoid")
+		if not humanoid or humanoid.Health <= 0 then
+			FenceManager.OnPlayerLeaveBauplatz(player)
+			continue
+		end
+
+		-- Prüfe ob Spieler noch auf Bauplatz steht
+		local rootPart = character:FindFirstChild("HumanoidRootPart")
+		if not rootPart then
+			FenceManager.OnPlayerLeaveBauplatz(player)
+			continue
+		end
+
+		local bauplatz = progress.Bauplatz
+		if not bauplatz or not bauplatz.Parent then
+			FenceManager.OnPlayerLeaveBauplatz(player)
+			continue
+		end
+
+		-- Distanz-Check
+		local distance = (rootPart.Position - bauplatz.Position).Magnitude
+		if distance > 5 then
+			FenceManager.OnPlayerLeaveBauplatz(player)
+			continue
+		end
+
+		-- Progress aktualisieren
+		local deltaTime = currentTime - progress.LastUpdate
+		progress.LastUpdate = currentTime
+
+		if progress.Phase == "standing" then
+			-- Phase 1: 3 Sekunden stehen
+			progress.StandProgress = progress.StandProgress + deltaTime
+
+			local standPercent = math.min(progress.StandProgress / GameConfig.Fence.StandTime, 1)
+			FenceBuildProgressRemote:FireClient(player, progress.FenceName, standPercent, "standing")
+
+			if progress.StandProgress >= GameConfig.Fence.StandTime then
+				-- Wechsle zu Build-Phase
+				progress.Phase = "building"
+				progress.BuildProgress = 0
+				FenceBuildStartRemote:FireClient(player, progress.FenceName, "building")
+				print("[FenceManager] " .. player.Name .. " started building " .. progress.FenceName)
+			end
+		elseif progress.Phase == "building" then
+			-- Phase 2: 3 Sekunden bauen
+			progress.BuildProgress = progress.BuildProgress + deltaTime
+
+			local buildPercent = math.min(progress.BuildProgress / GameConfig.Fence.BuildTime, 1)
+			FenceBuildProgressRemote:FireClient(player, progress.FenceName, buildPercent, "building")
+
+			if progress.BuildProgress >= GameConfig.Fence.BuildTime then
+				-- Bau abgeschlossen!
+				FenceManager.CompleteFenceBuild(progress.FenceName, player)
+				BuildProgress[player] = nil
+			end
+		end
+	end
+end
+
+function FenceManager.CompleteFenceBuild(zaunName, builder)
+	local data = FenceData[zaunName]
+	if not data or data.Built then return end
+
+	print("[FenceManager] Building fence: " .. zaunName)
+
+	-- Setze Status
+	data.Built = true
+	data.Health = data.MaxHealth
+
+	-- Clone Zaun-Model
+	local fenceModel = FenceTemplate:Clone()
+	fenceModel.Name = zaunName .. "_Built"
+	fenceModel:SetAttribute("IsFence", true)
+	fenceModel:SetAttribute("FenceName", zaunName)
+
+	-- Positioniere am Zaun-Part
+	local zaunPart = data.Part
+	if fenceModel.PrimaryPart then
+		fenceModel:SetPrimaryPartCFrame(zaunPart.CFrame)
+	else
+		-- Falls kein PrimaryPart, setze erstes Part
+		local firstPart = fenceModel:FindFirstChildWhichIsA("BasePart")
+		if firstPart then
+			fenceModel.PrimaryPart = firstPart
+			fenceModel:SetPrimaryPartCFrame(zaunPart.CFrame)
+		end
+	end
+
+	-- Build-Animation: Fence von unten nach oben erscheinen lassen
+	for _, part in pairs(fenceModel:GetDescendants()) do
+		if part:IsA("BasePart") then
+			local originalTransparency = part.Transparency
+			part.Transparency = 1
+
+			-- Animiere Erscheinen
+			task.spawn(function()
+				for i = 1, 10 do
+					part.Transparency = 1 - (i / 10) * (1 - originalTransparency)
+					task.wait(0.1)
+				end
+				part.Transparency = originalTransparency
+			end)
+		end
+	end
+
+	fenceModel.Parent = workspace
+
+	-- Speichere Model-Referenz
+	data.Model = fenceModel
+	table.insert(BuiltFences, fenceModel)
+
+	-- Mache Original-Part unsichtbar aber solide
+	zaunPart.Transparency = 1
+	zaunPart.CanCollide = true
+
+	-- Verstecke Bauplaetze
+	for _, bauplatz in pairs(data.Bauplaetze) do
+		bauplatz.Transparency = 1
+		bauplatz.CanCollide = false
+	end
+
+	-- Erstelle HP-Bar
+	FenceManager.CreateFenceHealthBar(fenceModel, data)
+
+	-- Partikel-Effekt
+	FenceManager.PlayBuildEffect(fenceModel)
+
+	-- Informiere alle Clients
+	FenceBuildCompleteRemote:FireAllClients(zaunName, builder.Name)
+
+	print("[FenceManager] Fence built: " .. zaunName .. " by " .. builder.Name)
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- HEALTH BAR
+-- ═══════════════════════════════════════════════════════════════
+
+function FenceManager.CreateFenceHealthBar(fenceModel, data)
+	-- Finde höchsten Punkt des Zauns
+	local maxY = -math.huge
+	local centerX, centerZ = 0, 0
+	local partCount = 0
+
+	for _, part in pairs(fenceModel:GetDescendants()) do
+		if part:IsA("BasePart") then
+			maxY = math.max(maxY, part.Position.Y + part.Size.Y / 2)
+			centerX = centerX + part.Position.X
+			centerZ = centerZ + part.Position.Z
+			partCount = partCount + 1
+		end
+	end
+
+	if partCount > 0 then
+		centerX = centerX / partCount
+		centerZ = centerZ / partCount
+	end
+
+	-- Erstelle BillboardGui
+	local billboardGui = Instance.new("BillboardGui")
+	billboardGui.Name = "FenceHealthBar"
+	billboardGui.Size = UDim2.new(4, 0, 0.5, 0)
+	billboardGui.StudsOffset = Vector3.new(0, 2, 0)
+	billboardGui.AlwaysOnTop = true
+	billboardGui.MaxDistance = 50
+
+	-- Background
+	local background = Instance.new("Frame")
+	background.Name = "Background"
+	background.Size = UDim2.new(1, 0, 1, 0)
+	background.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+	background.BorderSizePixel = 0
+	background.Parent = billboardGui
+
+	local bgCorner = Instance.new("UICorner")
+	bgCorner.CornerRadius = UDim.new(0.3, 0)
+	bgCorner.Parent = background
+
+	-- Health Bar
+	local healthBar = Instance.new("Frame")
+	healthBar.Name = "HealthBar"
+	healthBar.Size = UDim2.new(1, 0, 1, 0)
+	healthBar.BackgroundColor3 = Color3.fromRGB(100, 200, 100)
+	healthBar.BorderSizePixel = 0
+	healthBar.Parent = background
+
+	local hbCorner = Instance.new("UICorner")
+	hbCorner.CornerRadius = UDim.new(0.3, 0)
+	hbCorner.Parent = healthBar
+
+	-- Gradient
+	local gradient = Instance.new("UIGradient")
+	gradient.Color = ColorSequence.new{
+		ColorSequenceKeypoint.new(0, Color3.fromRGB(150, 255, 150)),
+		ColorSequenceKeypoint.new(1, Color3.fromRGB(50, 150, 50))
+	}
+	gradient.Rotation = 90
+	gradient.Parent = healthBar
+
+	-- Finde einen Part zum Anhängen
+	local attachPart = fenceModel.PrimaryPart or fenceModel:FindFirstChildWhichIsA("BasePart")
+	if attachPart then
+		billboardGui.Adornee = attachPart
+		billboardGui.Parent = fenceModel
+	end
+
+	data.HealthBar = healthBar
+end
+
+function FenceManager.UpdateFenceHealthBar(zaunName)
+	local data = FenceData[zaunName]
+	if not data or not data.HealthBar then return end
+
+	local healthPercent = data.Health / data.MaxHealth
+
+	-- Animiere Health Bar
+	TweenService:Create(
+		data.HealthBar,
+		TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+		{Size = UDim2.new(healthPercent, 0, 1, 0)}
+	):Play()
+
+	-- Farbe basierend auf Gesundheit
+	local color
+	if healthPercent > 0.6 then
+		color = Color3.fromRGB(100, 200, 100)
+	elseif healthPercent > 0.3 then
+		color = Color3.fromRGB(200, 200, 100)
+	else
+		color = Color3.fromRGB(200, 100, 100)
+	end
+
+	TweenService:Create(
+		data.HealthBar,
+		TweenInfo.new(0.3),
+		{BackgroundColor3 = color}
+	):Play()
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- DAMAGE SYSTEM
+-- ═══════════════════════════════════════════════════════════════
+
+function FenceManager.DamageFence(fenceModel, damage)
+	local zaunName = fenceModel:GetAttribute("FenceName")
+	if not zaunName then return false end
+
+	local data = FenceData[zaunName]
+	if not data or not data.Built then return false end
+
+	data.Health = data.Health - damage
+
+	-- Update Health Bar
+	FenceManager.UpdateFenceHealthBar(zaunName)
+
+	-- Informiere Clients
+	FenceDamagedRemote:FireAllClients(zaunName, data.Health, data.MaxHealth)
+
+	print("[FenceManager] Fence " .. zaunName .. " damaged: " .. data.Health .. "/" .. data.MaxHealth)
+
+	-- Prüfe ob zerstört
+	if data.Health <= 0 then
+		FenceManager.DestroyFence(zaunName)
+		return true -- Fence destroyed
+	end
+
+	return false -- Fence still standing
+end
+
+function FenceManager.DestroyFence(zaunName)
+	local data = FenceData[zaunName]
+	if not data then return end
+
+	print("[FenceManager] Destroying fence: " .. zaunName)
+
+	-- Zerstörungs-Effekt
+	if data.Model then
+		FenceManager.PlayDestroyEffect(data.Model)
+
+		task.delay(0.5, function()
+			if data.Model and data.Model.Parent then
+				data.Model:Destroy()
+			end
+		end)
+	end
+
+	-- Entferne aus BuiltFences Liste
+	for i, fence in pairs(BuiltFences) do
+		if fence == data.Model then
+			table.remove(BuiltFences, i)
+			break
+		end
+	end
+
+	-- Reset Status
+	data.Built = false
+	data.Health = 0
+	data.Model = nil
+	data.HealthBar = nil
+
+	-- Mache Zaun-Part wieder durchlässig
+	if data.Part then
+		data.Part.CanCollide = false
+	end
+
+	-- Zeige Bauplaetze wieder
+	for _, bauplatz in pairs(data.Bauplaetze) do
+		bauplatz.Transparency = 0.7
+		bauplatz.Color = Color3.fromRGB(100, 200, 100)
+	end
+
+	-- Informiere Clients
+	FenceDestroyedRemote:FireAllClients(zaunName)
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- EFFEKTE
+-- ═══════════════════════════════════════════════════════════════
+
+function FenceManager.PlayBuildEffect(fenceModel)
+	-- Partikel-Effekt beim Bauen
+	for _, part in pairs(fenceModel:GetDescendants()) do
+		if part:IsA("BasePart") then
+			local particles = Instance.new("ParticleEmitter")
+			particles.Name = "BuildParticles"
+			particles.Texture = "rbxassetid://6711256324" -- Sparkle
+			particles.Color = ColorSequence.new(Color3.fromRGB(200, 255, 200))
+			particles.Size = NumberSequence.new{
+				NumberSequenceKeypoint.new(0, 0.5),
+				NumberSequenceKeypoint.new(1, 0)
+			}
+			particles.Lifetime = NumberRange.new(0.5, 1)
+			particles.Rate = 50
+			particles.Speed = NumberRange.new(2, 5)
+			particles.SpreadAngle = Vector2.new(180, 180)
+			particles.Parent = part
+
+			-- Stoppe nach 1 Sekunde
+			task.delay(1, function()
+				if particles.Parent then
+					particles.Enabled = false
+					task.delay(1, function()
+						if particles.Parent then
+							particles:Destroy()
+						end
+					end)
+				end
+			end)
+
+			break -- Nur auf einem Part
+		end
+	end
+end
+
+function FenceManager.PlayDestroyEffect(fenceModel)
+	-- Zerstörungs-Effekt
+	for _, part in pairs(fenceModel:GetDescendants()) do
+		if part:IsA("BasePart") then
+			-- Trümmer-Effekt
+			local debris = Instance.new("ParticleEmitter")
+			debris.Name = "DestroyParticles"
+			debris.Texture = "rbxassetid://1084969434" -- Debris
+			debris.Color = ColorSequence.new(Color3.fromRGB(139, 90, 43))
+			debris.Size = NumberSequence.new{
+				NumberSequenceKeypoint.new(0, 1),
+				NumberSequenceKeypoint.new(1, 0)
+			}
+			debris.Lifetime = NumberRange.new(0.5, 1.5)
+			debris.Rate = 100
+			debris.Speed = NumberRange.new(10, 20)
+			debris.SpreadAngle = Vector2.new(180, 180)
+			debris.Parent = part
+
+			-- Emit burst
+			debris:Emit(30)
+			debris.Enabled = false
+		end
+	end
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- PUBLIC API
+-- ═══════════════════════════════════════════════════════════════
+
+function FenceManager.GetBuiltFences()
+	return BuiltFences
+end
+
+function FenceManager.GetFenceData(zaunName)
+	return FenceData[zaunName]
+end
+
+function FenceManager.IsFenceBuilt(zaunName)
+	local data = FenceData[zaunName]
+	return data and data.Built
+end
+
+function FenceManager.GetFenceHealth(zaunName)
+	local data = FenceData[zaunName]
+	if not data then return 0, 0 end
+	return data.Health, data.MaxHealth
+end
+
+function FenceManager.ResetAllFences()
+	for zaunName, data in pairs(FenceData) do
+		if data.Built then
+			FenceManager.DestroyFence(zaunName)
+		end
+	end
+	print("[FenceManager] All fences reset!")
+end
+
+return FenceManager

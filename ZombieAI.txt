@@ -1,0 +1,419 @@
+-- ZombieAI.lua
+-- Platzierung: ServerScriptService/Modules/ZombieAI (ModuleScript)
+
+local ZombieAI = {}
+
+-- Services
+local Players = game:GetService("Players")
+local PathfindingService = game:GetService("PathfindingService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local Debris = game:GetService("Debris")
+
+-- Modules
+local GameConfig = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("GameConfig"))
+
+-- Remotes
+local Remotes = ReplicatedStorage:WaitForChild("Remotes", 30)
+local ZombieAttackRemote = Remotes:WaitForChild("ZombieAttack")
+local ProjectileFiredRemote = Remotes:WaitForChild("ProjectileFired")
+
+-- AI Storage
+local ActiveAIs = {}
+local FenceManager = nil -- Wird später gesetzt
+
+-- Pathfinding Agent Parameters
+local PathfindingAgentParams = {
+	AgentRadius = 2,
+	AgentHeight = 5,
+	AgentCanJump = false,
+	AgentCanClimb = false,
+	WaypointSpacing = 4
+}
+
+-- ═══════════════════════════════════════════════════════════════
+-- INITIALISIERUNG
+-- ═══════════════════════════════════════════════════════════════
+
+function ZombieAI.Initialize(fenceManagerRef)
+	FenceManager = fenceManagerRef
+	print("[ZombieAI] Initialized!")
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- TARGET FINDING
+-- ═══════════════════════════════════════════════════════════════
+
+local function GetNearestPlayer(zombiePosition)
+	local nearestPlayer = nil
+	local nearestDistance = math.huge
+
+	for _, player in pairs(Players:GetPlayers()) do
+		local character = player.Character
+		if character then
+			local humanoid = character:FindFirstChildOfClass("Humanoid")
+			local rootPart = character:FindFirstChild("HumanoidRootPart")
+
+			if humanoid and humanoid.Health > 0 and rootPart then
+				local distance = (rootPart.Position - zombiePosition).Magnitude
+				if distance < nearestDistance then
+					nearestDistance = distance
+					nearestPlayer = player
+				end
+			end
+		end
+	end
+
+	return nearestPlayer, nearestDistance
+end
+
+local function GetNearestFenceInPath(startPos, endPos)
+	if not FenceManager then return nil end
+
+	-- Raycast zwischen Zombie und Ziel um Zäune zu finden
+	local direction = (endPos - startPos).Unit
+	local distance = (endPos - startPos).Magnitude
+
+	local raycastParams = RaycastParams.new()
+	raycastParams.FilterType = Enum.RaycastFilterType.Include
+
+	-- Hole alle gebauten Zäune
+	local builtFences = FenceManager.GetBuiltFences()
+	if #builtFences == 0 then return nil end
+
+	raycastParams.FilterDescendantsInstances = builtFences
+
+	local result = workspace:Raycast(startPos, direction * math.min(distance, 50), raycastParams)
+	if result and result.Instance then
+		-- Finde das Zaun-Model
+		local fence = result.Instance:FindFirstAncestorOfClass("Model")
+		if fence and fence:GetAttribute("IsFence") then
+			return fence, result.Position
+		end
+	end
+
+	return nil
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- PATHFINDING
+-- ═══════════════════════════════════════════════════════════════
+
+local function CreatePath()
+	return PathfindingService:CreatePath(PathfindingAgentParams)
+end
+
+-- Hilfsfunktion um Root-Part eines Zombies zu finden (ohne HumanoidRootPart)
+local function GetZombieRootPart(zombie)
+	-- Erst PrimaryPart prüfen
+	if zombie.PrimaryPart then
+		return zombie.PrimaryPart
+	end
+
+	-- Dann nach gespeichertem RootPartName suchen
+	local rootPartName = zombie:GetAttribute("RootPartName")
+	if rootPartName then
+		local rootPart = zombie:FindFirstChild(rootPartName)
+		if rootPart then
+			return rootPart
+		end
+	end
+
+	-- Fallback: Suche nach typischen Parts
+	return zombie:FindFirstChild("Torso")
+		or zombie:FindFirstChild("UpperTorso")
+		or zombie:FindFirstChild("Root")
+		or zombie:FindFirstChild("RootPart")
+		or zombie:FindFirstChildWhichIsA("BasePart")
+end
+
+local function MoveToTarget(zombie, humanoid, targetPosition)
+	local path = CreatePath()
+	local rootPart = GetZombieRootPart(zombie)
+
+	if not rootPart then return false end
+
+	local success, errorMessage = pcall(function()
+		path:ComputeAsync(rootPart.Position, targetPosition)
+	end)
+
+	if not success then
+		-- Fallback: Direktes Movement
+		humanoid:MoveTo(targetPosition)
+		return true
+	end
+
+	if path.Status == Enum.PathStatus.Success then
+		local waypoints = path:GetWaypoints()
+
+		for i, waypoint in pairs(waypoints) do
+			if not zombie.Parent then return false end -- Zombie wurde entfernt
+
+			humanoid:MoveTo(waypoint.Position)
+
+			-- Warte bis Waypoint erreicht oder Timeout
+			local moveFinished = humanoid.MoveToFinished:Wait()
+
+			if not moveFinished then
+				break
+			end
+		end
+		return true
+	else
+		-- Fallback: Direktes Movement
+		humanoid:MoveTo(targetPosition)
+		return true
+	end
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- ATTACK SYSTEM
+-- ═══════════════════════════════════════════════════════════════
+
+local function PerformMeleeAttack(zombie, target, damage)
+	if not zombie or not zombie.Parent then return end
+	if not target or not target.Parent then return end
+
+	local targetHumanoid = target:FindFirstChildOfClass("Humanoid")
+	if not targetHumanoid or targetHumanoid.Health <= 0 then return end
+
+	-- Schaden zufügen
+	targetHumanoid:TakeDamage(damage)
+
+	-- Animation auf Client abspielen
+	ZombieAttackRemote:FireAllClients(zombie, "Melee")
+
+	print("[ZombieAI] " .. zombie.Name .. " attacked for " .. damage .. " damage")
+end
+
+local function PerformRangedAttack(zombie, targetPosition, damage)
+	if not zombie or not zombie.Parent then return end
+
+	local rootPart = GetZombieRootPart(zombie)
+	if not rootPart then return end
+
+	-- Animation auf Client abspielen
+	ZombieAttackRemote:FireAllClients(zombie, "Range")
+
+	-- Warte 1 Sekunde wie in der Spezifikation
+	task.wait(GameConfig.Zombies.Teufel.ProjectileDelay)
+
+	if not zombie.Parent then return end
+
+	-- Berechne Richtung zum Ziel (mit leichter Ungenauigkeit für Dodge-Möglichkeit)
+	local spawnPos = rootPart.Position + Vector3.new(0, 2, 0)
+	local direction = (targetPosition - spawnPos).Unit
+
+	-- Leichte Ungenauigkeit hinzufügen (±5 Grad)
+	local spreadAngle = math.rad(5)
+	local randomSpread = CFrame.Angles(
+		(math.random() - 0.5) * spreadAngle,
+		(math.random() - 0.5) * spreadAngle,
+		0
+	)
+	direction = (randomSpread * CFrame.new(Vector3.new(0, 0, -1))).LookVector
+	direction = CFrame.lookAt(spawnPos, targetPosition) * randomSpread
+	direction = direction.LookVector
+
+	-- Erstelle Feuerball
+	local fireball = Instance.new("Part")
+	fireball.Name = "Fireball"
+	fireball.Shape = Enum.PartType.Ball
+	fireball.Size = Vector3.new(2, 2, 2)
+	fireball.Color = Color3.fromRGB(255, 50, 0)
+	fireball.Material = Enum.Material.Neon
+	fireball.CanCollide = false
+	fireball.Anchored = false
+	fireball.Position = spawnPos
+	fireball.Parent = workspace
+
+	-- Feuer-Effekt
+	local fire = Instance.new("Fire")
+	fire.Size = 5
+	fire.Heat = 10
+	fire.Color = Color3.fromRGB(255, 100, 0)
+	fire.SecondaryColor = Color3.fromRGB(255, 50, 0)
+	fire.Parent = fireball
+
+	-- Licht
+	local light = Instance.new("PointLight")
+	light.Color = Color3.fromRGB(255, 100, 0)
+	light.Brightness = 3
+	light.Range = 10
+	light.Parent = fireball
+
+	-- BodyVelocity für Bewegung
+	local bodyVelocity = Instance.new("BodyVelocity")
+	bodyVelocity.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+	bodyVelocity.Velocity = direction * GameConfig.Zombies.Teufel.ProjectileSpeed
+	bodyVelocity.Parent = fireball
+
+	-- Collision Detection
+	fireball.Touched:Connect(function(hit)
+		if not fireball.Parent then return end
+
+		-- Ignoriere Zombie selbst und andere Zombies
+		local hitModel = hit:FindFirstAncestorOfClass("Model")
+		if hitModel then
+			if hitModel:GetAttribute("ZombieType") then return end -- Andere Zombies ignorieren
+			if hitModel == zombie then return end -- Sich selbst ignorieren
+
+			-- Prüfe ob Spieler getroffen
+			local player = Players:GetPlayerFromCharacter(hitModel)
+			if player then
+				local humanoid = hitModel:FindFirstChildOfClass("Humanoid")
+				if humanoid and humanoid.Health > 0 then
+					humanoid:TakeDamage(damage)
+					print("[ZombieAI] Fireball hit player for " .. damage .. " damage")
+				end
+			end
+		end
+
+		-- Zerstöre Feuerball
+		fireball:Destroy()
+	end)
+
+	-- Auto-Cleanup nach 5 Sekunden
+	Debris:AddItem(fireball, 5)
+
+	-- Informiere Clients
+	ProjectileFiredRemote:FireAllClients(spawnPos, direction, "Fireball")
+end
+
+local function AttackFence(zombie, fence, damage)
+	if not zombie or not zombie.Parent then return end
+	if not fence or not fence.Parent then return end
+	if not FenceManager then return end
+
+	-- Animation abspielen
+	ZombieAttackRemote:FireAllClients(zombie, "Melee")
+
+	-- Schaden am Zaun
+	local destroyed = FenceManager.DamageFence(fence, damage)
+
+	print("[ZombieAI] " .. zombie.Name .. " attacked fence for " .. damage .. " damage")
+
+	return destroyed
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- AI LOOP
+-- ═══════════════════════════════════════════════════════════════
+
+local function ZombieAILoop(zombie)
+	local humanoid = zombie:FindFirstChildOfClass("Humanoid")
+	if not humanoid then return end
+
+	local zombieType = zombie:GetAttribute("ZombieType")
+	local damage = zombie:GetAttribute("Damage")
+	local attackRange = zombie:GetAttribute("AttackRange")
+	local attackCooldown = zombie:GetAttribute("AttackCooldown")
+	local isRanged = zombie:GetAttribute("IsRanged")
+
+	local lastAttackTime = 0
+
+	while zombie.Parent and humanoid.Health > 0 do
+		local rootPart = GetZombieRootPart(zombie)
+		if not rootPart then break end
+
+		local zombiePos = rootPart.Position
+
+		-- Finde nächsten Spieler
+		local nearestPlayer, playerDistance = GetNearestPlayer(zombiePos)
+
+		if nearestPlayer and nearestPlayer.Character then
+			local targetRootPart = nearestPlayer.Character:FindFirstChild("HumanoidRootPart")
+			if targetRootPart then
+				local targetPos = targetRootPart.Position
+
+				-- Prüfe ob Zaun im Weg ist
+				local fenceInPath, fencePos = GetNearestFenceInPath(zombiePos, targetPos)
+
+				if fenceInPath then
+					-- Zaun im Weg - Angreifen
+					local fenceDistance = (fencePos - zombiePos).Magnitude
+
+					if fenceDistance <= attackRange then
+						-- Zaun angreifen
+						if tick() - lastAttackTime >= attackCooldown then
+							local destroyed = AttackFence(zombie, fenceInPath, damage)
+							lastAttackTime = tick()
+
+							if destroyed then
+								-- Zaun zerstört, weiter zum Spieler
+								task.wait(0.5)
+							end
+						end
+					else
+						-- Zum Zaun bewegen
+						humanoid:MoveTo(fencePos)
+					end
+				else
+					-- Kein Zaun im Weg
+					if isRanged and playerDistance <= attackRange then
+						-- Ranged Angriff (Teufel)
+						if tick() - lastAttackTime >= attackCooldown then
+							humanoid:MoveTo(rootPart.Position) -- Stoppen
+							PerformRangedAttack(zombie, targetPos, damage)
+							lastAttackTime = tick()
+						end
+					elseif not isRanged and playerDistance <= attackRange then
+						-- Melee Angriff
+						if tick() - lastAttackTime >= attackCooldown then
+							PerformMeleeAttack(zombie, nearestPlayer.Character, damage)
+							lastAttackTime = tick()
+						end
+					else
+						-- Zum Spieler bewegen
+						humanoid:MoveTo(targetPos)
+					end
+				end
+			end
+		else
+			-- Kein Spieler gefunden - idle
+			task.wait(1)
+		end
+
+		task.wait(0.2) -- AI Update Rate
+	end
+
+	-- Cleanup
+	ActiveAIs[zombie] = nil
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- PUBLIC FUNCTIONS
+-- ═══════════════════════════════════════════════════════════════
+
+function ZombieAI.StartAI(zombie)
+	if ActiveAIs[zombie] then return end
+
+	ActiveAIs[zombie] = true
+
+	task.spawn(function()
+		ZombieAILoop(zombie)
+	end)
+
+	print("[ZombieAI] Started AI for " .. zombie.Name)
+end
+
+function ZombieAI.StopAI(zombie)
+	ActiveAIs[zombie] = nil
+end
+
+function ZombieAI.StopAllAI()
+	for zombie, _ in pairs(ActiveAIs) do
+		ActiveAIs[zombie] = nil
+	end
+	print("[ZombieAI] Stopped all AI")
+end
+
+function ZombieAI.GetActiveAICount()
+	local count = 0
+	for _, _ in pairs(ActiveAIs) do
+		count = count + 1
+	end
+	return count
+end
+
+return ZombieAI
