@@ -317,9 +317,9 @@ GameConfig.WeaponScales = {
 		[4] = 1.00, -- Shotgun
 		[5] = 1.00, -- Sturmgewehr
 		[6] = 0.40, -- Granate
-		[7] = 1.70, -- Flammenwerfer
-		[8] = 1.90, -- Minigun
-		[9] = 2.20, -- Bazooka
+		[7] = 0.34, -- Flammenwerfer (korrigiert)
+		[8] = 1.33, -- Minigun (korrigiert)
+		[9] = 1.10, -- Bazooka (korrigiert)
 	},
 	Toni = {
 		[1] = 0.90, -- Pistole
@@ -328,9 +328,9 @@ GameConfig.WeaponScales = {
 		[4] = 1.20, -- Shotgun
 		[5] = 1.20, -- Sturmgewehr
 		[6] = 0.50, -- Granate
-		[7] = 1.60, -- Flammenwerfer
-		[8] = 2.00, -- Minigun
-		[9] = 2.10, -- Bazooka
+		[7] = 0.32, -- Flammenwerfer (korrigiert)
+		[8] = 1.60, -- Minigun (korrigiert)
+		[9] = 1.26, -- Bazooka (korrigiert)
 	}
 }
 
